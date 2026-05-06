@@ -33,8 +33,8 @@ const STATIC_PROFILE: UserProfile = {
     creditsRemaining: 999999,
     tier: "Pro",
     tabularModel: "gemini-3-flash-preview",
-    claudeApiKey: process.env.NEXT_PUBLIC_ANTHROPIC_API_KEY || null,
-    geminiApiKey: process.env.NEXT_PUBLIC_GEMINI_API_KEY || null,
+    claudeApiKey: "configured",
+    geminiApiKey: "configured",
 };
 
 const UserProfileContext = createContext<UserProfileContextType>({
