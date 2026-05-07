@@ -252,12 +252,17 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
 
             {/* Back to CarbonIQ */}
             <div className={`mb-2 ${!isOpen ? "hidden md:flex justify-center px-2" : "px-3"}`}>
-                <a
-                    href="https://carboniq.sumsum.ai/MainPage"
-                    target="_blank"
-                    rel="noopener noreferrer"
+                <button
+                    onClick={() => {
+                        if (window.opener && !window.opener.closed) {
+                            window.opener.focus();
+                            window.close();
+                        } else {
+                            window.location.href = "https://carboniq.sumsum.ai/MainPage";
+                        }
+                    }}
                     title="Back to CarbonIQ"
-                    className={`flex items-center gap-2.5 rounded-lg transition-opacity hover:opacity-80 ${
+                    className={`flex items-center gap-2.5 rounded-lg transition-opacity hover:opacity-80 cursor-pointer ${
                         isOpen ? "w-full px-3 py-2" : "h-9 w-9 justify-center"
                     } ${shouldAnimate ? "sidebar-fade-in" : ""}`}
                     style={{ backgroundColor: "#FEEA0F" }}
@@ -268,7 +273,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                             Back to CarbonIQ
                         </span>
                     )}
-                </a>
+                </button>
             </div>
 
             {/* User Profile */}
