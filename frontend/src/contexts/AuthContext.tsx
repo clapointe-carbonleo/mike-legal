@@ -6,6 +6,7 @@ import { supabase } from "@/lib/supabase";
 interface User {
     id: string;
     email: string;
+    name: string;
 }
 
 interface AuthContextType {
@@ -15,7 +16,7 @@ interface AuthContextType {
     signOut: () => Promise<void>;
 }
 
-const FALLBACK_USER: User = { id: "", email: "" };
+const FALLBACK_USER: User = { id: "", email: "", name: "" };
 
 const AuthContext = createContext<AuthContextType>({
     user: FALLBACK_USER,
@@ -23,6 +24,16 @@ const AuthContext = createContext<AuthContextType>({
     authLoading: true,
     signOut: async () => {},
 });
+
+function extractUser(supabaseUser: { id: string; email?: string | null; user_metadata?: Record<string, unknown> }): User {
+    return {
+        id: supabaseUser.id,
+        email: supabaseUser.email ?? "",
+        name: (supabaseUser.user_metadata?.full_name as string | undefined)
+            ?? (supabaseUser.user_metadata?.name as string | undefined)
+            ?? "",
+    };
+}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
     const [user, setUser] = useState<User>(FALLBACK_USER);
@@ -32,7 +43,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     useEffect(() => {
         supabase.auth.getSession().then(({ data: { session } }) => {
             if (session?.user) {
-                setUser({ id: session.user.id, email: session.user.email ?? "" });
+                setUser(extractUser(session.user));
                 setIsAuthenticated(true);
             }
             setAuthLoading(false);
@@ -40,7 +51,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
         const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
             if (session?.user) {
-                setUser({ id: session.user.id, email: session.user.email ?? "" });
+                setUser(extractUser(session.user));
                 setIsAuthenticated(true);
             } else {
                 setUser(FALLBACK_USER);

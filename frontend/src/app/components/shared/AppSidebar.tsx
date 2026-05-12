@@ -92,12 +92,14 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
     const getUserInitials = (email: string) => {
         if (profile?.displayName)
             return profile.displayName.charAt(0).toUpperCase();
+        if (user?.name)
+            return user.name.charAt(0).toUpperCase();
         return email.charAt(0).toUpperCase();
     };
 
     const getDisplayName = () => {
-        if (!profile) return "";
-        return profile.displayName || user?.email?.split("@")[0] || "";
+        if (profile?.displayName) return profile.displayName;
+        return user?.name || user?.email?.split("@")[0] || "";
     };
 
     const getUserTier = () => {
@@ -293,7 +295,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                             title={!isOpen ? user.email : undefined}
                         >
                             <div className="h-7 w-7 flex-shrink-0 rounded-full bg-[#292629] flex items-center justify-center text-white text-xs font-bold">
-                                {getUserInitials(user.email)}
+                                {getUserInitials(user.email ?? "")}
                             </div>
                             {isOpen && (
                                 <div
