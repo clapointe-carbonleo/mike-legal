@@ -1,16 +1,20 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { Menu } from "lucide-react";
 import { ChatHistoryProvider } from "@/app/contexts/ChatHistoryContext";
 import { SidebarContext } from "@/app/contexts/SidebarContext";
 import { AppSidebar } from "@/app/components/shared/AppSidebar";
+import { useAuth } from "@/contexts/AuthContext";
 
 export default function MikeLayout({
     children,
 }: {
     children: React.ReactNode;
 }) {
+    const router = useRouter();
+    const { isAuthenticated, authLoading } = useAuth();
 
     const [isSidebarOpenDesktop, setIsSidebarOpenDesktop] = useState(() => {
         if (typeof window !== "undefined") {
@@ -26,6 +30,12 @@ export default function MikeLayout({
         }
         return true;
     });
+
+    useEffect(() => {
+        if (!authLoading && !isAuthenticated) {
+            router.replace("/login");
+        }
+    }, [authLoading, isAuthenticated, router]);
 
     useEffect(() => {
         if (typeof window !== "undefined" && window.innerWidth >= 768) {
@@ -53,6 +63,14 @@ export default function MikeLayout({
             setIsSidebarOpen(!isSidebarOpen);
         }
     };
+
+    if (authLoading || !isAuthenticated) {
+        return (
+            <div className="h-dvh flex items-center justify-center bg-background">
+                <div className="h-5 w-5 animate-spin rounded-full border-2 border-foreground/20 border-t-foreground" />
+            </div>
+        );
+    }
 
     return (
         <ChatHistoryProvider>
