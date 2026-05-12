@@ -91,12 +91,14 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
     const getUserInitials = (email: string) => {
         if (profile?.displayName)
             return profile.displayName.charAt(0).toUpperCase();
+        if (user?.name)
+            return user.name.charAt(0).toUpperCase();
         return email.charAt(0).toUpperCase();
     };
 
     const getDisplayName = () => {
-        if (!profile) return "";
-        return profile.displayName || user?.email?.split("@")[0] || "";
+        if (profile?.displayName) return profile.displayName;
+        return user?.name || user?.email?.split("@")[0] || "";
     };
 
     const getUserTier = () => {
