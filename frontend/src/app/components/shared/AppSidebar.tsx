@@ -10,6 +10,7 @@ import {
     User,
     ChevronsUpDown,
     ChevronDown,
+    Home,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useUserProfile } from "@/contexts/UserProfileContext";
@@ -251,6 +252,32 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                 </div>
             )}
 
+            {/* Back to CarbonIQ */}
+            <div className={`mb-2 ${!isOpen ? "hidden md:flex justify-center px-2" : "px-3"}`}>
+                <button
+                    onClick={() => {
+                        if (window.opener && !window.opener.closed) {
+                            window.opener.focus();
+                            window.close();
+                        } else {
+                            window.location.href = "https://carboniq.sumsum.ai/MainPage";
+                        }
+                    }}
+                    title="Back to CarbonIQ"
+                    className={`flex items-center gap-2.5 rounded-lg transition-opacity hover:opacity-80 cursor-pointer ${
+                        isOpen ? "w-full px-3 py-2" : "h-9 w-9 justify-center"
+                    } ${shouldAnimate ? "sidebar-fade-in" : ""}`}
+                    style={{ backgroundColor: "#FEEA0F" }}
+                >
+                    <Home className="h-4 w-4 flex-shrink-0" style={{ color: "#292629" }} />
+                    {isOpen && (
+                        <span className="text-xs font-bold tracking-tight" style={{ color: "#292629" }}>
+                            Back to CarbonIQ
+                        </span>
+                    )}
+                </button>
+            </div>
+
             {/* User Profile */}
             <div className="mt-auto">
                 {user && (
@@ -265,7 +292,7 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                     : "bg-[#F5F5F5] hover:bg-[#F5F5F5]"
                             }`}
                             style={{ width: isOpen ? "calc(100% - 1.5rem)" : undefined }}
-                            title={!isOpen ? (user.email ?? undefined) : undefined}
+                            title={!isOpen ? user.email : undefined}
                         >
                             <div className="h-7 w-7 flex-shrink-0 rounded-full bg-[#292629] flex items-center justify-center text-white text-xs font-bold">
                                 {getUserInitials(user.email ?? "")}
