@@ -18,23 +18,22 @@ export async function requireAuth(
     next: NextFunction,
 ): Promise<void> {
     const authHeader = req.headers.authorization;
+    const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
 
-    if (!authHeader?.startsWith("Bearer ")) {
-        res.status(401).json({ error: "Missing or invalid Authorization header" });
+    if (!token) {
+        res.status(401).json({ detail: "Not authenticated" });
         return;
     }
 
-    const token = authHeader.slice(7).trim();
-    const { data, error } = await adminClient.auth.getUser(token);
+    const { data: { user }, error } = await adminClient.auth.getUser(token);
 
-    if (error || !data.user) {
-        res.status(401).json({ error: "Invalid or expired token" });
+    if (error || !user) {
+        res.status(401).json({ detail: "Invalid or expired session" });
         return;
     }
 
-    res.locals.userId = data.user.id;
-    res.locals.userEmail = data.user.email ?? "";
+    res.locals.userId = user.id;
+    res.locals.userEmail = user.email ?? "";
     res.locals.token = token;
-
     next();
 }
