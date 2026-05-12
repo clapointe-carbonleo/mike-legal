@@ -26,7 +26,7 @@ interface UserProfileContextType {
 }
 
 const STATIC_PROFILE: UserProfile = {
-    displayName: "Carbonleo",
+    displayName: null,
     organisation: "Carbonleo",
     messageCreditsUsed: 0,
     creditsResetDate: "2099-01-01T00:00:00.000Z",
