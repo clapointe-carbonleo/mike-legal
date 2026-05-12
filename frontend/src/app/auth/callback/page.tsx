@@ -1,32 +1,67 @@
 "use client";
 
-import { useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 
-export default function AuthCallbackPage() {
+function Spinner() {
+    return (
+        <div className="h-dvh flex items-center justify-center bg-[#292629]">
+            <div className="w-5 h-5 border-2 border-white/20 border-t-white rounded-full animate-spin" />
+        </div>
+    );
+}
+
+function CallbackContent() {
     const router = useRouter();
+    const searchParams = useSearchParams();
+    const [error, setError] = useState<string | null>(null);
 
     useEffect(() => {
-        const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-            if (event === "SIGNED_IN" && session) {
-                router.replace("/assistant");
-            } else if (event === "SIGNED_OUT" || (event !== "INITIAL_SESSION" && !session)) {
-                router.replace("/login?error=auth_failed");
-            }
-        });
+        const code = searchParams.get("code");
+        const errorParam = searchParams.get("error");
+        const errorDescription = searchParams.get("error_description");
 
-        // Fallback: if session already exists (code already exchanged), redirect immediately
-        supabase.auth.getSession().then(({ data: { session } }) => {
-            if (session) router.replace("/assistant");
-        });
+        if (errorParam) {
+            setError(errorDescription ?? errorParam);
+            return;
+        }
 
-        return () => subscription.unsubscribe();
-    }, [router]);
+        if (code) {
+            supabase.auth.exchangeCodeForSession(code).then(({ error }) => {
+                if (error) {
+                    setError(error.message);
+                } else {
+                    router.replace("/assistant");
+                }
+            });
+        } else {
+            supabase.auth.getSession().then(({ data: { session } }) => {
+                router.replace(session ? "/assistant" : "/login");
+            });
+        }
+    }, [searchParams, router]);
 
+    if (error) {
+        return (
+            <div className="h-dvh flex items-center justify-center bg-[#292629]">
+                <div className="text-center space-y-4 px-6">
+                    <p className="text-red-400 text-sm">{error}</p>
+                    <a href="/login" className="text-white/50 text-xs underline">
+                        Back to login
+                    </a>
+                </div>
+            </div>
+        );
+    }
+
+    return <Spinner />;
+}
+
+export default function AuthCallbackPage() {
     return (
-        <div className="h-dvh flex items-center justify-center bg-background">
-            <div className="h-5 w-5 animate-spin rounded-full border-2 border-foreground/20 border-t-foreground" />
-        </div>
+        <Suspense fallback={<Spinner />}>
+            <CallbackContent />
+        </Suspense>
     );
 }
