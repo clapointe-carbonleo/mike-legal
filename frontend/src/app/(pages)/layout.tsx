@@ -8,14 +8,7 @@ import { SidebarContext } from "@/app/contexts/SidebarContext";
 import { AppSidebar } from "@/app/components/shared/AppSidebar";
 import { useAuth } from "@/contexts/AuthContext";
 
-export default function MikeLayout({
-    children,
-}: {
-    children: React.ReactNode;
-}) {
-    const router = useRouter();
-    const { isAuthenticated, authLoading } = useAuth();
-
+function AppLayout({ children }: { children: React.ReactNode }) {
     const [isSidebarOpenDesktop, setIsSidebarOpenDesktop] = useState(() => {
         if (typeof window !== "undefined") {
             const saved = localStorage.getItem("sidebarOpen");
@@ -30,12 +23,6 @@ export default function MikeLayout({
         }
         return true;
     });
-
-    useEffect(() => {
-        if (!authLoading && !isAuthenticated) {
-            router.replace("/login");
-        }
-    }, [authLoading, isAuthenticated, router]);
 
     useEffect(() => {
         if (typeof window !== "undefined" && window.innerWidth >= 768) {
@@ -64,14 +51,6 @@ export default function MikeLayout({
         }
     };
 
-    if (authLoading || !isAuthenticated) {
-        return (
-            <div className="h-dvh flex items-center justify-center bg-background">
-                <div className="h-5 w-5 animate-spin rounded-full border-2 border-foreground/20 border-t-foreground" />
-            </div>
-        );
-    }
-
     return (
         <ChatHistoryProvider>
             <SidebarContext.Provider
@@ -84,7 +63,6 @@ export default function MikeLayout({
                             onToggle={handleSidebarToggle}
                         />
                         <div className="flex-1 flex flex-col h-dvh md:overflow-hidden relative w-full">
-                            {/* Mobile header */}
                             <div className="flex md:hidden items-center gap-3 px-4 py-3 border-b border-border shrink-0">
                                 <button
                                     onClick={handleSidebarToggle}
@@ -102,4 +80,27 @@ export default function MikeLayout({
             </SidebarContext.Provider>
         </ChatHistoryProvider>
     );
+}
+
+export default function MikeLayout({ children }: { children: React.ReactNode }) {
+    const { isAuthenticated, authLoading } = useAuth();
+    const router = useRouter();
+
+    useEffect(() => {
+        if (!authLoading && !isAuthenticated) {
+            router.replace("/login");
+        }
+    }, [isAuthenticated, authLoading, router]);
+
+    if (authLoading) {
+        return (
+            <div className="h-dvh flex items-center justify-center bg-background">
+                <div className="w-5 h-5 border-2 border-foreground/20 border-t-foreground rounded-full animate-spin" />
+            </div>
+        );
+    }
+
+    if (!isAuthenticated) return null;
+
+    return <AppLayout>{children}</AppLayout>;
 }
