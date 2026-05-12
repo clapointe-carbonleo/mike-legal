@@ -1,40 +1,51 @@
 "use client";
 
 import React, { createContext, useContext, useEffect, useState, ReactNode } from "react";
-import { User, Session } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
 
+interface User {
+    id: string;
+    email: string;
+}
+
 interface AuthContextType {
-    user: User | null;
-    session: Session | null;
+    user: User;
     isAuthenticated: boolean;
     authLoading: boolean;
     signOut: () => Promise<void>;
 }
 
+const FALLBACK_USER: User = { id: "", email: "" };
+
 const AuthContext = createContext<AuthContextType>({
-    user: null,
-    session: null,
+    user: FALLBACK_USER,
     isAuthenticated: false,
     authLoading: true,
     signOut: async () => {},
 });
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-    const [user, setUser] = useState<User | null>(null);
-    const [session, setSession] = useState<Session | null>(null);
+    const [user, setUser] = useState<User>(FALLBACK_USER);
+    const [isAuthenticated, setIsAuthenticated] = useState(false);
     const [authLoading, setAuthLoading] = useState(true);
 
     useEffect(() => {
         supabase.auth.getSession().then(({ data: { session } }) => {
-            setSession(session);
-            setUser(session?.user ?? null);
+            if (session?.user) {
+                setUser({ id: session.user.id, email: session.user.email ?? "" });
+                setIsAuthenticated(true);
+            }
             setAuthLoading(false);
         });
 
         const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-            setSession(session);
-            setUser(session?.user ?? null);
+            if (session?.user) {
+                setUser({ id: session.user.id, email: session.user.email ?? "" });
+                setIsAuthenticated(true);
+            } else {
+                setUser(FALLBACK_USER);
+                setIsAuthenticated(false);
+            }
             setAuthLoading(false);
         });
 
@@ -46,13 +57,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
 
     return (
-        <AuthContext.Provider value={{
-            user,
-            session,
-            isAuthenticated: !!user,
-            authLoading,
-            signOut,
-        }}>
+        <AuthContext.Provider value={{ user, isAuthenticated, authLoading, signOut }}>
             {children}
         </AuthContext.Provider>
     );
