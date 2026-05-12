@@ -263,10 +263,10 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                                     : "bg-[#F5F5F5] hover:bg-[#F5F5F5]"
                             }`}
                             style={{ width: isOpen ? "calc(100% - 1.5rem)" : undefined }}
-                            title={!isOpen ? user.email : undefined}
+                            title={!isOpen ? (user.email ?? undefined) : undefined}
                         >
                             <div className="h-7 w-7 flex-shrink-0 rounded-full bg-[#292629] flex items-center justify-center text-white text-xs font-bold">
-                                {getUserInitials(user.email)}
+                                {getUserInitials(user.email ?? "")}
                             </div>
                             {isOpen && (
                                 <div
