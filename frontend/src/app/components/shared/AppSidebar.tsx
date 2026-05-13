@@ -252,34 +252,35 @@ export function AppSidebar({ isOpen, onToggle }: AppSidebarProps) {
                 </div>
             )}
 
-            {/* Back to CarbonIQ */}
-            <div className={`mb-2 ${!isOpen ? "hidden md:flex justify-center px-2" : "px-3"}`}>
-                <button
-                    onClick={() => {
-                        if (window.opener && !window.opener.closed) {
-                            window.opener.focus();
-                            window.close();
-                        } else {
-                            window.location.href = "https://carboniq.sumsum.ai/MainPage";
-                        }
-                    }}
-                    title="Back to CarbonIQ"
-                    className={`flex items-center gap-2.5 rounded-lg transition-opacity hover:opacity-80 cursor-pointer ${
-                        isOpen ? "w-full px-3 py-2" : "h-9 w-9 justify-center"
-                    } ${shouldAnimate ? "sidebar-fade-in" : ""}`}
-                    style={{ backgroundColor: "#FEEA0F" }}
-                >
-                    <Home className="h-4 w-4 flex-shrink-0" style={{ color: "#292629" }} />
-                    {isOpen && (
-                        <span className="text-xs font-bold tracking-tight" style={{ color: "#292629" }}>
-                            Back to CarbonIQ
-                        </span>
-                    )}
-                </button>
-            </div>
-
-            {/* User Profile */}
+            {/* Bottom section — always pinned to bottom */}
             <div className="mt-auto">
+                {/* Back to CarbonIQ */}
+                <div className={`mb-2 ${!isOpen ? "hidden md:flex justify-center px-2" : "px-3"}`}>
+                    <button
+                        onClick={() => {
+                            if (window.opener && !window.opener.closed) {
+                                window.opener.focus();
+                                window.close();
+                            } else {
+                                window.location.href = "https://carboniq.sumsum.ai/MainPage";
+                            }
+                        }}
+                        title="Back to CarbonIQ"
+                        className={`flex items-center gap-2.5 rounded-lg transition-opacity hover:opacity-80 cursor-pointer ${
+                            isOpen ? "w-full px-3 py-2" : "h-9 w-9 justify-center"
+                        } ${shouldAnimate ? "sidebar-fade-in" : ""}`}
+                        style={{ backgroundColor: "#FEEA0F" }}
+                    >
+                        <Home className="h-4 w-4 flex-shrink-0" style={{ color: "#292629" }} />
+                        {isOpen && (
+                            <span className="text-xs font-bold tracking-tight" style={{ color: "#292629" }}>
+                                Back to CarbonIQ
+                            </span>
+                        )}
+                    </button>
+                </div>
+
+                {/* User Profile */}
                 {user && (
                     <div className="relative">
                         <button
