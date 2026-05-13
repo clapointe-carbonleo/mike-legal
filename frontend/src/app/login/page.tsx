@@ -19,7 +19,7 @@ export default function LoginPage() {
         const redirectTo = `${window.location.origin}/auth/callback`;
         await supabase.auth.signInWithOAuth({
             provider: "azure",
-            options: { redirectTo, scopes: "email" },
+            options: { redirectTo, scopes: "openid profile email" },
         });
     };
 
