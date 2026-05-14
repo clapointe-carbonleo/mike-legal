@@ -7,6 +7,11 @@ import { downloadFile } from "../lib/storage";
 const pageindexRouter = Router();
 
 const PAGEINDEX_URL = process.env.PAGEINDEX_URL ?? "http://localhost:8000";
+const PAGEINDEX_SECRET = process.env.PAGEINDEX_SECRET ?? "";
+
+function pageindexHeaders(): Record<string, string> {
+  return PAGEINDEX_SECRET ? { "x-api-secret": PAGEINDEX_SECRET } : {};
+}
 
 // Index a raw PDF upload — returns doc_id, caller manages storage
 pageindexRouter.post(
@@ -32,6 +37,7 @@ pageindexRouter.post(
     const upstream = await fetch(`${PAGEINDEX_URL}/index`, {
       method: "POST",
       body: form,
+      headers: pageindexHeaders(),
     });
     const data = await upstream.json();
     if (!upstream.ok) return void res.status(upstream.status).json(data);
@@ -91,6 +97,7 @@ pageindexRouter.post("/index-document", requireAuth, async (req, res) => {
   const upstream = await fetch(`${PAGEINDEX_URL}/index`, {
     method: "POST",
     body: form,
+    headers: pageindexHeaders(),
   });
   const data = (await upstream.json()) as { doc_id?: string };
   if (!upstream.ok) return void res.status(upstream.status).json(data);
@@ -129,7 +136,10 @@ pageindexRouter.post("/query", requireAuth, async (req, res) => {
 
   const upstream = await fetch(`${PAGEINDEX_URL}/query`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      ...pageindexHeaders(),
+    },
     body: JSON.stringify({ doc_id: doc.pageindex_doc_id, question }),
   });
   const data = await upstream.json();
