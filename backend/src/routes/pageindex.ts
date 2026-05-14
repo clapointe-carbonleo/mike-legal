@@ -52,12 +52,14 @@ pageindexRouter.post("/index-document", requireAuth, async (req, res) => {
   if (!document_id)
     return void res.status(400).json({ detail: "document_id is required." });
 
+  const userId = res.locals.userId as string;
   const db = createServerSupabase();
 
   const { data: doc, error: docErr } = await db
     .from("documents")
-    .select("id, filename")
+    .select("id, filename, user_id")
     .eq("id", document_id)
+    .eq("user_id", userId)
     .single();
 
   if (docErr || !doc)
@@ -123,11 +125,13 @@ pageindexRouter.post("/query", requireAuth, async (req, res) => {
       .status(400)
       .json({ detail: "document_id and question are required." });
 
+  const userId = res.locals.userId as string;
   const db = createServerSupabase();
   const { data: doc } = await db
     .from("documents")
     .select("pageindex_doc_id")
     .eq("id", document_id)
+    .eq("user_id", userId)
     .single();
 
   if (!doc?.pageindex_doc_id)
