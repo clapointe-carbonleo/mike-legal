@@ -275,38 +275,48 @@ export async function renameDocumentVersion(
     );
 }
 
+interface UploadUrlResponse {
+    doc_id: string;
+    upload_url: string;
+    storage_key: string;
+    content_type: string;
+}
+
+async function presignedUpload(
+    file: File,
+    projectId?: string,
+): Promise<MikeDocument> {
+    const meta = await apiRequest<UploadUrlResponse>(
+        "/single-documents/upload-url",
+        {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ filename: file.name, project_id: projectId }),
+        },
+    );
+    const r2Res = await fetch(meta.upload_url, {
+        method: "PUT",
+        headers: { "Content-Type": meta.content_type },
+        body: file,
+    });
+    if (!r2Res.ok) throw new Error(`R2 upload failed: ${await r2Res.text()}`);
+    return apiRequest<MikeDocument>(
+        `/single-documents/${meta.doc_id}/finalize-upload`,
+        { method: "POST" },
+    );
+}
+
 export async function uploadProjectDocument(
     projectId: string,
     file: File,
 ): Promise<MikeDocument> {
-    const authHeaders = await getAuthHeader();
-    const form = new FormData();
-    form.append("file", file);
-    const response = await fetch(
-        `${API_BASE}/projects/${projectId}/documents`,
-        {
-            method: "POST",
-            headers: { ...authHeaders },
-            body: form,
-        },
-    );
-    if (!response.ok) throw new Error(await response.text());
-    return response.json() as Promise<MikeDocument>;
+    return presignedUpload(file, projectId);
 }
 
 export async function uploadStandaloneDocument(
     file: File,
 ): Promise<MikeDocument> {
-    const authHeaders = await getAuthHeader();
-    const form = new FormData();
-    form.append("file", file);
-    const response = await fetch(`${API_BASE}/single-documents`, {
-        method: "POST",
-        headers: { ...authHeaders },
-        body: form,
-    });
-    if (!response.ok) throw new Error(await response.text());
-    return response.json() as Promise<MikeDocument>;
+    return presignedUpload(file);
 }
 
 export async function listStandaloneDocuments(): Promise<MikeDocument[]> {

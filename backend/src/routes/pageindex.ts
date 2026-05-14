@@ -38,6 +38,7 @@ pageindexRouter.post(
       method: "POST",
       body: form,
       headers: pageindexHeaders(),
+      signal: AbortSignal.timeout(600_000),
     });
     const data = await upstream.json();
     if (!upstream.ok) return void res.status(upstream.status).json(data);
@@ -51,12 +52,14 @@ pageindexRouter.post("/index-document", requireAuth, async (req, res) => {
   if (!document_id)
     return void res.status(400).json({ detail: "document_id is required." });
 
+  const userId = res.locals.userId as string;
   const db = createServerSupabase();
 
   const { data: doc, error: docErr } = await db
     .from("documents")
-    .select("id, filename")
+    .select("id, filename, user_id")
     .eq("id", document_id)
+    .eq("user_id", userId)
     .single();
 
   if (docErr || !doc)
@@ -98,6 +101,7 @@ pageindexRouter.post("/index-document", requireAuth, async (req, res) => {
     method: "POST",
     body: form,
     headers: pageindexHeaders(),
+    signal: AbortSignal.timeout(600_000),
   });
   const data = (await upstream.json()) as { doc_id?: string };
   if (!upstream.ok) return void res.status(upstream.status).json(data);
@@ -121,11 +125,13 @@ pageindexRouter.post("/query", requireAuth, async (req, res) => {
       .status(400)
       .json({ detail: "document_id and question are required." });
 
+  const userId = res.locals.userId as string;
   const db = createServerSupabase();
   const { data: doc } = await db
     .from("documents")
     .select("pageindex_doc_id")
     .eq("id", document_id)
+    .eq("user_id", userId)
     .single();
 
   if (!doc?.pageindex_doc_id)
@@ -141,6 +147,7 @@ pageindexRouter.post("/query", requireAuth, async (req, res) => {
       ...pageindexHeaders(),
     },
     body: JSON.stringify({ doc_id: doc.pageindex_doc_id, question }),
+    signal: AbortSignal.timeout(300_000),
   });
   const data = await upstream.json();
   if (!upstream.ok) return void res.status(upstream.status).json(data);

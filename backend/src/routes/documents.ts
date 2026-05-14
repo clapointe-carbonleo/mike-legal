@@ -5,6 +5,7 @@ import {
   buildContentDisposition,
   downloadFile,
   deleteFile,
+  getPresignedPutUrl,
   getSignedUrl,
   storageKey,
   uploadFile,
@@ -56,6 +57,177 @@ documentsRouter.post(
     const userId = res.locals.userId as string;
     const db = createServerSupabase();
     await handleDocumentUpload(req, res, userId, null, db);
+  },
+);
+
+// POST /single-documents/upload-url
+// Creates a document record and returns a presigned R2 PUT URL for direct
+// browser-to-R2 upload, bypassing Vercel's 4.5 MB body limit.
+// Accepts optional project_id to attach the doc to a project.
+// After the browser PUT completes, call POST /:documentId/finalize-upload.
+documentsRouter.post("/upload-url", requireAuth, async (req, res) => {
+  const userId = res.locals.userId as string;
+  const { filename, project_id } = req.body as {
+    filename?: string;
+    project_id?: string;
+  };
+  if (!filename)
+    return void res.status(400).json({ detail: "filename is required" });
+
+  const suffix = filename.includes(".")
+    ? filename.split(".").pop()!.toLowerCase()
+    : "";
+  if (!ALLOWED_TYPES.has(suffix))
+    return void res
+      .status(400)
+      .json({ detail: `Unsupported file type: ${suffix}` });
+
+  const db = createServerSupabase();
+  const { data: doc, error } = await db
+    .from("documents")
+    .insert({
+      user_id: userId,
+      project_id: project_id ?? null,
+      filename,
+      file_type: suffix,
+      status: "uploading",
+    })
+    .select("id")
+    .single();
+
+  if (error || !doc)
+    return void res
+      .status(500)
+      .json({ detail: "Failed to create document record" });
+
+  const key = storageKey(userId, doc.id, filename);
+  const contentType =
+    suffix === "pdf"
+      ? "application/pdf"
+      : "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  const uploadUrl = await getPresignedPutUrl(key, contentType);
+
+  if (!uploadUrl)
+    return void res.status(503).json({ detail: "Storage not configured" });
+
+  return void res.json({
+    doc_id: doc.id,
+    upload_url: uploadUrl,
+    storage_key: key,
+    content_type: contentType,
+  });
+});
+
+// POST /single-documents/:documentId/finalize-upload
+// Called after a direct R2 PUT upload completes. Downloads the file from R2,
+// runs structure extraction, optional DOCX→PDF conversion, and creates the
+// V1 document_versions row.
+documentsRouter.post(
+  "/:documentId/finalize-upload",
+  requireAuth,
+  async (req, res) => {
+    const userId = res.locals.userId as string;
+    const { documentId } = req.params;
+    const db = createServerSupabase();
+
+    const { data: doc } = await db
+      .from("documents")
+      .select("id, filename, file_type, user_id, project_id")
+      .eq("id", documentId)
+      .eq("user_id", userId)
+      .single();
+
+    if (!doc)
+      return void res.status(404).json({ detail: "Document not found" });
+
+    const filename = doc.filename as string;
+    const suffix = doc.file_type as string;
+    const key = storageKey(userId, documentId, filename);
+
+    await db
+      .from("documents")
+      .update({ status: "processing" })
+      .eq("id", documentId);
+
+    try {
+      const raw = await downloadFile(key);
+      if (!raw)
+        return void res
+          .status(500)
+          .json({ detail: "File not found in storage — upload may not have completed" });
+
+      const tree = await extractStructureTree(raw, suffix, filename);
+      const pageCount = suffix === "pdf" ? await countPdfPages(raw) : null;
+
+      let pdfStoragePath: string | null = null;
+      if (suffix === "docx" || suffix === "doc") {
+        try {
+          const contentBuf = Buffer.from(raw);
+          const pdfBuf = await docxToPdf(contentBuf);
+          const pdfKey = convertedPdfKey(userId, documentId);
+          await uploadFile(
+            pdfKey,
+            pdfBuf.buffer.slice(
+              pdfBuf.byteOffset,
+              pdfBuf.byteOffset + pdfBuf.byteLength,
+            ) as ArrayBuffer,
+            "application/pdf",
+          );
+          pdfStoragePath = pdfKey;
+        } catch (err) {
+          console.error(`[finalize] DOCX→PDF failed for ${filename}:`, err);
+        }
+      } else if (suffix === "pdf") {
+        pdfStoragePath = key;
+      }
+
+      const { data: versionRow, error: verErr } = await db
+        .from("document_versions")
+        .insert({
+          document_id: documentId,
+          storage_path: key,
+          pdf_storage_path: pdfStoragePath,
+          source: "upload",
+          version_number: 1,
+          display_name: filename,
+        })
+        .select("id")
+        .single();
+
+      if (verErr || !versionRow)
+        throw new Error(`Failed to record version: ${verErr?.message}`);
+
+      await db
+        .from("documents")
+        .update({
+          current_version_id: versionRow.id,
+          size_bytes: raw.byteLength,
+          page_count: pageCount,
+          structure_tree: tree ?? null,
+          status: "ready",
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", documentId);
+
+      const { data: updated } = await db
+        .from("documents")
+        .select("*")
+        .eq("id", documentId)
+        .single();
+
+      const responseDoc = updated
+        ? { ...updated, storage_path: key, pdf_storage_path: pdfStoragePath }
+        : updated;
+      return void res.status(201).json(responseDoc);
+    } catch (e) {
+      await db
+        .from("documents")
+        .update({ status: "error" })
+        .eq("id", documentId);
+      return void res
+        .status(500)
+        .json({ detail: `Processing failed: ${String(e)}` });
+    }
   },
 );
 

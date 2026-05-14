@@ -86,6 +86,29 @@ export async function deleteFile(key: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// Presigned PUT URL (for direct browser-to-R2 uploads)
+// ---------------------------------------------------------------------------
+
+export async function getPresignedPutUrl(
+  key: string,
+  contentType: string,
+  expiresIn = 300,
+): Promise<string | null> {
+  if (!storageEnabled) return null;
+  try {
+    const client = getClient();
+    const command = new PutObjectCommand({
+      Bucket: BUCKET,
+      Key: key,
+      ContentType: contentType,
+    });
+    return await awsGetSignedUrl(client, command, { expiresIn });
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Signed URL (pre-signed for temporary direct access)
 // ---------------------------------------------------------------------------
 

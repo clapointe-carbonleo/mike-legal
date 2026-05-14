@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Download, Loader2, MessageCircle, Send, Trash2, X } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { DocView } from "./DocView";
 import { getDocumentUrl, indexDocument, queryDocument } from "@/app/lib/mikeApi";
 import type { MikeDocument } from "./types";
@@ -219,13 +221,31 @@ export function DocViewModal({
                                                 className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
                                             >
                                                 <div
-                                                    className={`max-w-[85%] rounded-lg px-3 py-2 text-sm whitespace-pre-wrap ${
+                                                    className={`max-w-[85%] rounded-lg px-3 py-2 text-sm ${
                                                         m.role === "user"
-                                                            ? "bg-[#292629] text-white"
+                                                            ? "bg-[#292629] text-white whitespace-pre-wrap"
                                                             : "bg-[#F5F5F5] text-[#292629]"
                                                     }`}
                                                 >
-                                                    {m.content}
+                                                    {m.role === "user" ? m.content : (
+                                                        <ReactMarkdown
+                                                            remarkPlugins={[remarkGfm]}
+                                                            components={{
+                                                                p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
+                                                                strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+                                                                ul: ({ children }) => <ul className="list-disc pl-4 mb-2 space-y-1">{children}</ul>,
+                                                                ol: ({ children }) => <ol className="list-decimal pl-4 mb-2 space-y-1">{children}</ol>,
+                                                                li: ({ children }) => <li>{children}</li>,
+                                                                h1: ({ children }) => <p className="font-semibold mb-1">{children}</p>,
+                                                                h2: ({ children }) => <p className="font-semibold mb-1">{children}</p>,
+                                                                h3: ({ children }) => <p className="font-medium mb-1">{children}</p>,
+                                                                code: ({ children }) => <code className="bg-[#E8E8E8] px-1 rounded text-xs font-mono">{children}</code>,
+                                                                hr: () => <hr className="my-2 border-[#E8E8E8]" />,
+                                                            }}
+                                                        >
+                                                            {m.content}
+                                                        </ReactMarkdown>
+                                                    )}
                                                 </div>
                                             </div>
                                         ))}
