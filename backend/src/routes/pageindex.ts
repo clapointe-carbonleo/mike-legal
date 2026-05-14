@@ -38,6 +38,7 @@ pageindexRouter.post(
       method: "POST",
       body: form,
       headers: pageindexHeaders(),
+      signal: AbortSignal.timeout(600_000),
     });
     const data = await upstream.json();
     if (!upstream.ok) return void res.status(upstream.status).json(data);
@@ -98,6 +99,7 @@ pageindexRouter.post("/index-document", requireAuth, async (req, res) => {
     method: "POST",
     body: form,
     headers: pageindexHeaders(),
+    signal: AbortSignal.timeout(600_000),
   });
   const data = (await upstream.json()) as { doc_id?: string };
   if (!upstream.ok) return void res.status(upstream.status).json(data);
@@ -141,6 +143,7 @@ pageindexRouter.post("/query", requireAuth, async (req, res) => {
       ...pageindexHeaders(),
     },
     body: JSON.stringify({ doc_id: doc.pageindex_doc_id, question }),
+    signal: AbortSignal.timeout(300_000),
   });
   const data = await upstream.json();
   if (!upstream.ok) return void res.status(upstream.status).json(data);
