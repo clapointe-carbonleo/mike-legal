@@ -815,3 +815,28 @@ export async function deleteWorkflowShare(
         method: "DELETE",
     });
 }
+
+// ---------------------------------------------------------------------------
+// PageIndex
+// ---------------------------------------------------------------------------
+
+export async function indexDocument(
+    documentId: string,
+): Promise<{ pageindex_doc_id: string }> {
+    return apiRequest<{ pageindex_doc_id: string }>("/pageindex/index-document", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ document_id: documentId }),
+    });
+}
+
+export async function queryDocument(
+    documentId: string,
+    question: string,
+): Promise<{ answer: string }> {
+    return apiRequest<{ answer: string }>("/pageindex/query", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ document_id: documentId, question }),
+    });
+}
