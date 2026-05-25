@@ -100,13 +100,13 @@ export async function deleteFile(key: string): Promise<void> {
 
 export async function getPresignedPutUrl(
   key: string,
-  _contentType: string,
+  contentType: string,
   expiresIn = 300,
 ): Promise<string | null> {
   if (!storageEnabled) return null;
   try {
     const client = getClient();
-    const command = new PutObjectCommand({ Bucket: BUCKET, Key: key });
+    const command = new PutObjectCommand({ Bucket: BUCKET, Key: key, ContentType: contentType });
     return await awsGetSignedUrl(client, command, { expiresIn });
   } catch {
     return null;

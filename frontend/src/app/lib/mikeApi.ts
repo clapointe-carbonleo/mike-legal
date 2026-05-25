@@ -296,7 +296,7 @@ async function presignedUpload(
     );
     const r2Res = await fetch(
         `/api/r2-upload?url=${encodeURIComponent(meta.upload_url)}`,
-        { method: "PUT", body: file },
+        { method: "PUT", headers: { "Content-Type": meta.content_type }, body: file },
     );
     if (!r2Res.ok) throw new Error(`R2 upload failed: ${await r2Res.text()}`);
     return apiRequest<MikeDocument>(
