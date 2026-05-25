@@ -25,6 +25,10 @@ function getClient(): S3Client {
       accessKeyId: process.env.R2_ACCESS_KEY_ID!,
       secretAccessKey: process.env.R2_SECRET_ACCESS_KEY!,
     },
+    // AWS SDK v3.575+ adds CRC32 checksums by default. R2 rejects presigned
+    // PUT requests that include a checksum it cannot verify client-side.
+    requestChecksumCalculation: "WHEN_REQUIRED",
+    responseChecksumValidation: "WHEN_REQUIRED",
   });
 }
 
@@ -120,10 +124,6 @@ export async function getSignedUrl(
   if (!storageEnabled) return null;
   try {
     const client = getClient();
-    // Override the response Content-Disposition so the browser uses this
-    // filename on download, instead of the last path segment of the R2 key
-    // (which includes the document UUID). The `download` attribute on <a>
-    // is ignored for cross-origin URLs, so we have to set it server-side.
     const responseContentDisposition = downloadFilename
       ? buildContentDisposition("attachment", downloadFilename)
       : undefined;
@@ -150,7 +150,7 @@ export function sanitizeDispositionFilename(name: string): string {
 
 export function encodeRFC5987(str: string): string {
   return encodeURIComponent(str).replace(
-    /['()*]/g,
+    /'()*'/g,
     (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase(),
   );
 }
