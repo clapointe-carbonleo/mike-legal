@@ -27,8 +27,9 @@ function getClient(): S3Client {
     },
     // AWS SDK v3.575+ adds CRC32 checksums by default. R2 rejects presigned
     // PUT requests that include a checksum it cannot verify client-side.
+    // Only requestChecksumCalculation is needed — responseChecksumValidation
+    // interferes with GetObject against R2 and breaks document loading.
     requestChecksumCalculation: "WHEN_REQUIRED",
-    responseChecksumValidation: "WHEN_REQUIRED",
   });
 }
 
@@ -65,7 +66,10 @@ export async function uploadFile(
 // ---------------------------------------------------------------------------
 
 export async function downloadFile(key: string): Promise<ArrayBuffer | null> {
-  if (!storageEnabled) return null;
+  if (!storageEnabled) {
+    console.error("[storage] storageEnabled=false — check R2_ENDPOINT_URL, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY env vars");
+    return null;
+  }
   try {
     const client = getClient();
     const response = await client.send(
@@ -74,7 +78,8 @@ export async function downloadFile(key: string): Promise<ArrayBuffer | null> {
     if (!response.Body) return null;
     const bytes = await response.Body.transformToByteArray();
     return bytes.buffer as ArrayBuffer;
-  } catch {
+  } catch (err) {
+    console.error(`[storage] downloadFile failed — bucket=${BUCKET} key=${key}`, err);
     return null;
   }
 }
