@@ -207,3 +207,4 @@ function storageExtension(filename: string, fallback: string): string {
   const ext = filename.slice(lastDot).toLowerCase();
   return /^\.[a-z0-9]{1,16}$/.test(ext) ? ext : fallback;
 }
+
