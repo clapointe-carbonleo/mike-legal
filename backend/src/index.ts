@@ -23,11 +23,7 @@ const ALLOWED_ORIGINS = [
 app.use(
   cors({
     origin: (origin, callback) => {
-      if (
-        !origin ||
-        ALLOWED_ORIGINS.includes(origin) ||
-        /^https:\/\/[a-z0-9-]+\.vercel\.app$/.test(origin)
-      ) {
+      if (!origin || ALLOWED_ORIGINS.includes(origin)) {
         callback(null, true);
       } else {
         callback(new Error("Not allowed by CORS"));
@@ -54,7 +50,7 @@ app.get("/health", (_req, res) => res.json({ ok: true }));
 
 if (process.env.VERCEL !== "1") {
   app.listen(PORT, () => {
-    console.log(`Mike Legal backend running on port ${PORT}`);
+    console.log(`Mike backend running on port ${PORT}`);
   });
 }
 
