@@ -3,15 +3,12 @@
 import React, { createContext, useContext, useEffect, useState, ReactNode } from "react";
 import { supabase } from "@/lib/supabase";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3001";
-
-async function syncProfileName(accessToken: string, fullName: string) {
+async function syncProfileName(userId: string, email: string, fullName: string) {
     if (!fullName) return;
-    fetch(`${API_BASE}/user/profile`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
-        body: JSON.stringify({ full_name: fullName }),
-    }).catch(() => {});
+    supabase.from("profiles").upsert(
+        { id: userId, email, full_name: fullName },
+        { onConflict: "id", ignoreDuplicates: false }
+    ).then(({ error }) => { if (error) console.error("[syncProfile]", error.message); });
 }
 
 interface User {
@@ -62,7 +59,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 const u = extractUser(session.user);
                 setUser(u);
                 setIsAuthenticated(true);
-                syncProfileName(session.access_token, u.name);
+                syncProfileName(session.user.id, session.user.email ?? "", u.name);
             }
             setAuthLoading(false);
         });
@@ -72,7 +69,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 const u = extractUser(session.user);
                 setUser(u);
                 setIsAuthenticated(true);
-                syncProfileName(session.access_token, u.name);
+                syncProfileName(session.user.id, session.user.email ?? "", u.name);
             } else {
                 setUser(FALLBACK_USER);
                 setIsAuthenticated(false);

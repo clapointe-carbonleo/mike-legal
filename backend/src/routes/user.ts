@@ -7,13 +7,13 @@ export const userRouter = Router();
 // POST /user/profile
 userRouter.post("/profile", requireAuth, async (req, res) => {
   const userId = res.locals.userId as string;
-  const fullName = typeof req.body?.full_name === "string" ? req.body.full_name : undefined;
   const db = createServerSupabase();
-  const row: Record<string, unknown> = { user_id: userId };
-  if (fullName) row.full_name = fullName;
   const { error } = await db
     .from("user_profiles")
-    .upsert(row, { onConflict: "user_id", ignoreDuplicates: false });
+    .upsert(
+      { user_id: userId },
+      { onConflict: "user_id", ignoreDuplicates: true },
+    );
   if (error) return void res.status(500).json({ detail: error.message });
   res.json({ ok: true });
 });
