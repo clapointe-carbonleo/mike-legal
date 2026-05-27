@@ -26,11 +26,16 @@ const AuthContext = createContext<AuthContextType>({
 });
 
 function extractUser(supabaseUser: { id: string; email?: string | null; user_metadata?: Record<string, unknown> }): User {
+    const meta = supabaseUser.user_metadata ?? {};
+    const givenName = meta.given_name as string | undefined;
+    const familyName = meta.family_name as string | undefined;
+    const combinedName = givenName || familyName ? `${givenName ?? ""} ${familyName ?? ""}`.trim() : undefined;
     return {
         id: supabaseUser.id,
         email: supabaseUser.email ?? "",
-        name: (supabaseUser.user_metadata?.full_name as string | undefined)
-            ?? (supabaseUser.user_metadata?.name as string | undefined)
+        name: (meta.full_name as string | undefined)
+            ?? (meta.name as string | undefined)
+            ?? combinedName
             ?? "",
     };
 }
