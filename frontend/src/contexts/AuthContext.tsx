@@ -3,6 +3,17 @@
 import React, { createContext, useContext, useEffect, useState, ReactNode } from "react";
 import { supabase } from "@/lib/supabase";
 
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3001";
+
+async function syncProfileName(accessToken: string, fullName: string) {
+    if (!fullName) return;
+    fetch(`${API_BASE}/user/profile`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}` },
+        body: JSON.stringify({ full_name: fullName }),
+    }).catch(() => {});
+}
+
 interface User {
     id: string;
     email: string;
@@ -48,16 +59,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     useEffect(() => {
         supabase.auth.getSession().then(({ data: { session } }) => {
             if (session?.user) {
-                setUser(extractUser(session.user));
+                const u = extractUser(session.user);
+                setUser(u);
                 setIsAuthenticated(true);
+                syncProfileName(session.access_token, u.name);
             }
             setAuthLoading(false);
         });
 
         const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
             if (session?.user) {
-                setUser(extractUser(session.user));
+                const u = extractUser(session.user);
+                setUser(u);
                 setIsAuthenticated(true);
+                syncProfileName(session.access_token, u.name);
             } else {
                 setUser(FALLBACK_USER);
                 setIsAuthenticated(false);
