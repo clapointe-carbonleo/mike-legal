@@ -151,7 +151,7 @@ export function sanitizeDispositionFilename(name: string): string {
 
 export function encodeRFC5987(str: string): string {
   return encodeURIComponent(str).replace(
-    /'()*'/g,
+    /['()*]/g,
     (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase(),
   );
 }
