@@ -636,22 +636,27 @@ export async function extractPdfText(buf: ArrayBuffer): Promise<string> {
         const pdfjsLib = await import(
             "pdfjs-dist/legacy/build/pdf.mjs" as string
         );
-        const pdf = await (
-            pdfjsLib as unknown as {
-                getDocument: (opts: unknown) => {
-                    promise: Promise<{
-                        numPages: number;
-                        getPage: (n: number) => Promise<{
-                            getTextContent: () => Promise<{
-                                items: { str?: string }[];
-                            }>;
+        // Disable workers — required in serverless environments
+        const lib = pdfjsLib as unknown as {
+            GlobalWorkerOptions: { workerSrc: string };
+            getDocument: (opts: unknown) => {
+                promise: Promise<{
+                    numPages: number;
+                    getPage: (n: number) => Promise<{
+                        getTextContent: () => Promise<{
+                            items: { str?: string }[];
                         }>;
                     }>;
-                };
-            }
-        ).getDocument({
+                }>;
+            };
+        };
+        lib.GlobalWorkerOptions.workerSrc = "";
+        const pdf = await lib.getDocument({
             data: new Uint8Array(buf),
             standardFontDataUrl: STANDARD_FONT_DATA_URL,
+            useWorkerFetch: false,
+            isEvalSupported: false,
+            useSystemFonts: true,
         }).promise;
         const parts: string[] = [];
         for (let i = 1; i <= pdf.numPages; i++) {
@@ -662,7 +667,8 @@ export async function extractPdfText(buf: ArrayBuffer): Promise<string> {
             );
         }
         return parts.join("\n\n");
-    } catch {
+    } catch (err) {
+        console.error("[extractPdfText] failed:", err);
         return "";
     }
 }
