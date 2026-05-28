@@ -633,40 +633,14 @@ export function buildMessages(
 
 export async function extractPdfText(buf: ArrayBuffer): Promise<string> {
     try {
-        const pdfjsLib = await import(
-            "pdfjs-dist/legacy/build/pdf.mjs" as string
-        );
-        // Disable workers — required in serverless environments
-        const lib = pdfjsLib as unknown as {
-            GlobalWorkerOptions: { workerSrc: string };
-            getDocument: (opts: unknown) => {
-                promise: Promise<{
-                    numPages: number;
-                    getPage: (n: number) => Promise<{
-                        getTextContent: () => Promise<{
-                            items: { str?: string }[];
-                        }>;
-                    }>;
-                }>;
-            };
-        };
-        lib.GlobalWorkerOptions.workerSrc = "";
-        const pdf = await lib.getDocument({
-            data: new Uint8Array(buf),
-            standardFontDataUrl: STANDARD_FONT_DATA_URL,
-            useWorkerFetch: false,
-            isEvalSupported: false,
-            useSystemFonts: true,
-        }).promise;
-        const parts: string[] = [];
-        for (let i = 1; i <= pdf.numPages; i++) {
-            const page = await pdf.getPage(i);
-            const textContent = await page.getTextContent();
-            parts.push(
-                `[Page ${i}]\n${textContent.items.map((it) => it.str ?? "").join(" ")}`,
-            );
-        }
-        return parts.join("\n\n");
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const pdfParse = require("pdf-parse/lib/pdf-parse.js") as (
+            buffer: Buffer,
+            options?: { max?: number }
+        ) => Promise<{ text: string; numpages: number }>;
+        const data = await pdfParse(Buffer.from(buf));
+        console.log(`[extractPdfText] success numpages=${data.numpages} length=${data.text.length}`);
+        return data.text || "";
     } catch (err) {
         console.error("[extractPdfText] failed:", err);
         return "";
