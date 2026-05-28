@@ -583,7 +583,8 @@ export function buildMessages(
     docIndex?: DocIndex,
 ) {
     const formatted: unknown[] = [];
-    let systemContent = SYSTEM_PROMPT;
+    const now = new Date().toLocaleDateString('en-CA', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: 'America/Toronto' });
+    let systemContent = SYSTEM_PROMPT + `\n\nToday's date: ${now}`;
 
     if (systemPromptExtra) {
         systemContent += `\n\n${systemPromptExtra.trim()}`;
