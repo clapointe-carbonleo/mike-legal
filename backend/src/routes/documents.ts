@@ -1142,15 +1142,13 @@ async function handleDocumentUpload(
 
 async function countPdfPages(buf: ArrayBuffer): Promise<number | null> {
   try {
-    const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs" as string);
-    const pdf = await (
-      pdfjsLib as unknown as {
-        getDocument: (opts: unknown) => {
-          promise: Promise<{ numPages: number }>;
-        };
-      }
-    ).getDocument({ data: new Uint8Array(buf) }).promise;
-    return pdf.numPages;
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const pdfParse = require("pdf-parse/lib/pdf-parse.js") as (
+      buffer: Buffer,
+      options?: { max?: number }
+    ) => Promise<{ numpages: number }>;
+    const data = await pdfParse(Buffer.from(buf), { max: 1 });
+    return data.numpages;
   } catch {
     return null;
   }
@@ -1163,30 +1161,14 @@ async function extractStructureTree(
 ): Promise<unknown[] | null> {
   try {
     if (fileType === "pdf") {
-      const pdfjsLib = await import(
-        "pdfjs-dist/legacy/build/pdf.mjs" as string
-      );
-      const pdf = await (
-        pdfjsLib as unknown as {
-          getDocument: (opts: unknown) => {
-            promise: Promise<{
-              numPages: number;
-              getOutline: () => Promise<{ title?: string }[]>;
-            }>;
-          };
-        }
-      ).getDocument({ data: new Uint8Array(content) }).promise;
-      if (pdf.numPages <= 5) return null;
-      const outline = await pdf.getOutline();
-      if (outline?.length)
-        return outline.map((item, i) => ({
-          id: `h1-${i}`,
-          title: item.title ?? `Item ${i + 1}`,
-          level: 1,
-          page_number: null,
-          children: [],
-        }));
-      return Array.from({ length: pdf.numPages }, (_, i) => ({
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const pdfParse = require("pdf-parse/lib/pdf-parse.js") as (
+        buffer: Buffer,
+        options?: { max?: number }
+      ) => Promise<{ numpages: number }>;
+      const data = await pdfParse(Buffer.from(content), { max: 1 });
+      if (data.numpages <= 5) return null;
+      return Array.from({ length: data.numpages }, (_, i) => ({
         id: `page-${i + 1}`,
         title: `Page ${i + 1}`,
         level: 1,
