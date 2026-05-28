@@ -75,7 +75,7 @@ export type ChatMessage = {
 // Constants
 // ---------------------------------------------------------------------------
 
-export const SYSTEM_PROMPT = `You are Mike, an AI legal assistant that helps lawyers and legal professionals analyze documents, answer legal questions, and draft legal documents.
+export const SYSTEM_PROMPT = `You are Mike, a smart AI assistant built by CarbonLeo. You help with a wide range of tasks — legal document analysis, drafting, and legal questions are your specialty, but you can answer general questions and assist with any topic the user brings up. Always be helpful, direct, and professional.
 
 DOCUMENT CITATION INSTRUCTIONS:
 When you reference specific content from a document, place a numbered marker [1], [2], etc. inline in your prose at the point of reference.
@@ -583,7 +583,8 @@ export function buildMessages(
     docIndex?: DocIndex,
 ) {
     const formatted: unknown[] = [];
-    let systemContent = SYSTEM_PROMPT;
+    const now = new Date().toLocaleDateString('en-CA', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: 'America/Toronto' });
+    let systemContent = SYSTEM_PROMPT + `\n\nToday's date: ${now}`;
 
     if (systemPromptExtra) {
         systemContent += `\n\n${systemPromptExtra.trim()}`;
