@@ -30,7 +30,7 @@ pageindexRouter.post(
     const form = new FormData();
     form.append(
       "file",
-      new Blob([file.buffer], { type: "application/pdf" }),
+      new Blob([file.buffer.buffer as ArrayBuffer], { type: "application/pdf" }),
       file.originalname,
     );
 

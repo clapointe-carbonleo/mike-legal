@@ -37,3 +37,12 @@ export async function requireAuth(
     res.locals.token = token;
     next();
 }
+
+// CarbonLeo uses Azure SSO — MFA is handled upstream; this is a pass-through.
+export function requireMfaIfEnrolled(
+    _req: Request,
+    _res: Response,
+    next: NextFunction,
+): void {
+    next();
+}
