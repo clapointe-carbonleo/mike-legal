@@ -12,29 +12,25 @@
 import {
   S3Client,
   PutObjectCommand,
+  GetObjectCommand,
   DeleteObjectCommand,
-  ListObjectsV2Command,
 } from "@aws-sdk/client-s3";
-import * as S3Commands from "@aws-sdk/client-s3";
 import { getSignedUrl as awsGetSignedUrl } from "@aws-sdk/s3-request-presigner";
 
-const GetObjectCommand = (S3Commands as any).GetObjectCommand;
-
-let cachedClient: S3Client | undefined;
-
 function getClient(): S3Client {
-  if (!cachedClient) {
-    cachedClient = new S3Client({
-      region: "auto",
-      endpoint: process.env.R2_ENDPOINT_URL!,
-      forcePathStyle: true,
-      credentials: {
-        accessKeyId: process.env.R2_ACCESS_KEY_ID!,
-        secretAccessKey: process.env.R2_SECRET_ACCESS_KEY!,
-      },
-    });
-  }
-  return cachedClient;
+  return new S3Client({
+    region: "auto",
+    endpoint: process.env.R2_ENDPOINT_URL!,
+    credentials: {
+      accessKeyId: process.env.R2_ACCESS_KEY_ID!,
+      secretAccessKey: process.env.R2_SECRET_ACCESS_KEY!,
+    },
+    // AWS SDK v3.575+ adds CRC32 checksums by default. R2 rejects presigned
+    // PUT requests that include a checksum it cannot verify client-side.
+    // Only requestChecksumCalculation is needed — responseChecksumValidation
+    // interferes with GetObject against R2 and breaks document loading.
+    requestChecksumCalculation: "WHEN_REQUIRED",
+  });
 }
 
 const BUCKET = process.env.R2_BUCKET_NAME ?? "mike";
@@ -45,14 +41,6 @@ export const storageEnabled = Boolean(
   process.env.R2_SECRET_ACCESS_KEY,
 );
 
-function requireStorageConfig(): void {
-  if (!storageEnabled) {
-    throw new Error(
-      "R2_ENDPOINT_URL, R2_ACCESS_KEY_ID, and R2_SECRET_ACCESS_KEY must be set",
-    );
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Upload
 // ---------------------------------------------------------------------------
@@ -62,7 +50,6 @@ export async function uploadFile(
   content: ArrayBuffer,
   contentType: string,
 ): Promise<void> {
-  requireStorageConfig();
   const client = getClient();
   await client.send(
     new PutObjectCommand({
@@ -79,39 +66,22 @@ export async function uploadFile(
 // ---------------------------------------------------------------------------
 
 export async function downloadFile(key: string): Promise<ArrayBuffer | null> {
-  if (!storageEnabled) return null;
+  if (!storageEnabled) {
+    console.error("[storage] storageEnabled=false — check R2_ENDPOINT_URL, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY env vars");
+    return null;
+  }
   try {
     const client = getClient();
-    const response = (await client.send(
+    const response = await client.send(
       new GetObjectCommand({ Bucket: BUCKET, Key: key }),
-    )) as any;
+    );
     if (!response.Body) return null;
     const bytes = await response.Body.transformToByteArray();
     return bytes.buffer as ArrayBuffer;
-  } catch {
+  } catch (err) {
+    console.error(`[storage] downloadFile failed — bucket=${BUCKET} key=${key}`, err);
     return null;
   }
-}
-
-export async function listFiles(prefix: string): Promise<string[]> {
-  if (!storageEnabled) return [];
-  const client = getClient();
-  const keys: string[] = [];
-  let ContinuationToken: string | undefined;
-  do {
-    const response = await client.send(
-      new ListObjectsV2Command({
-        Bucket: BUCKET,
-        Prefix: prefix,
-        ContinuationToken,
-      }),
-    );
-    for (const item of response.Contents ?? []) {
-      if (item.Key) keys.push(item.Key);
-    }
-    ContinuationToken = response.NextContinuationToken;
-  } while (ContinuationToken);
-  return keys;
 }
 
 // ---------------------------------------------------------------------------
@@ -122,6 +92,25 @@ export async function deleteFile(key: string): Promise<void> {
   if (!storageEnabled) return;
   const client = getClient();
   await client.send(new DeleteObjectCommand({ Bucket: BUCKET, Key: key }));
+}
+
+// ---------------------------------------------------------------------------
+// Presigned PUT URL (for direct browser-to-R2 uploads)
+// ---------------------------------------------------------------------------
+
+export async function getPresignedPutUrl(
+  key: string,
+  contentType: string,
+  expiresIn = 300,
+): Promise<string | null> {
+  if (!storageEnabled) return null;
+  try {
+    const client = getClient();
+    const command = new PutObjectCommand({ Bucket: BUCKET, Key: key, ContentType: contentType });
+    return await awsGetSignedUrl(client, command, { expiresIn });
+  } catch {
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -136,10 +125,6 @@ export async function getSignedUrl(
   if (!storageEnabled) return null;
   try {
     const client = getClient();
-    // Override the response Content-Disposition so the browser uses this
-    // filename on download, instead of the last path segment of the R2 key
-    // (which includes the document UUID). The `download` attribute on <a>
-    // is ignored for cross-origin URLs, so we have to set it server-side.
     const responseContentDisposition = downloadFilename
       ? buildContentDisposition("attachment", downloadFilename)
       : undefined;
@@ -147,7 +132,7 @@ export async function getSignedUrl(
       Bucket: BUCKET,
       Key: key,
       ResponseContentDisposition: responseContentDisposition,
-    }) as any;
+    });
     return await awsGetSignedUrl(client, command, { expiresIn });
   } catch {
     return null;
@@ -161,9 +146,7 @@ export function normalizeDownloadFilename(name: string): string {
 }
 
 export function sanitizeDispositionFilename(name: string): string {
-  return normalizeDownloadFilename(name)
-    .replace(/["\\]/g, "_")
-    .replace(/[^\x20-\x7E]/g, "_");
+  return normalizeDownloadFilename(name).replace(/["\\]/g, "_");
 }
 
 export function encodeRFC5987(str: string): string {
@@ -224,3 +207,4 @@ function storageExtension(filename: string, fallback: string): string {
   const ext = filename.slice(lastDot).toLowerCase();
   return /^\.[a-z0-9]{1,16}$/.test(ext) ? ext : fallback;
 }
+

@@ -5,6 +5,7 @@ import {
   buildContentDisposition,
   downloadFile,
   deleteFile,
+  getPresignedPutUrl,
   getSignedUrl,
   storageKey,
   uploadFile,
@@ -26,30 +27,6 @@ import { singleFileUpload } from "../lib/upload";
 
 export const documentsRouter = Router();
 const ALLOWED_TYPES = new Set(["pdf", "docx", "doc"]);
-const isDev = process.env.NODE_ENV !== "production";
-const devLog = (...args: Parameters<typeof console.log>) => {
-  if (isDev) console.log(...args);
-};
-
-async function deleteDocumentAndVersionFiles(
-  db: ReturnType<typeof createServerSupabase>,
-  documentId: string,
-) {
-  // Storage lives on document_versions — fan out and delete each version's
-  // bytes (source + PDF rendition) before dropping the document row.
-  const { data: versions } = await db
-    .from("document_versions")
-    .select("storage_path, pdf_storage_path")
-    .eq("document_id", documentId);
-  await Promise.all(
-    (versions ?? []).flatMap((v) =>
-      [v.storage_path, v.pdf_storage_path]
-        .filter((p): p is string => typeof p === "string" && p.length > 0)
-        .map((p) => deleteFile(p).catch(() => {})),
-    ),
-  );
-  return db.from("documents").delete().eq("id", documentId);
-}
 
 // GET /single-documents
 documentsRouter.get("/", requireAuth, async (req, res) => {
@@ -83,6 +60,177 @@ documentsRouter.post(
   },
 );
 
+// POST /single-documents/upload-url
+// Creates a document record and returns a presigned R2 PUT URL for direct
+// browser-to-R2 upload, bypassing Vercel's 4.5 MB body limit.
+// Accepts optional project_id to attach the doc to a project.
+// After the browser PUT completes, call POST /:documentId/finalize-upload.
+documentsRouter.post("/upload-url", requireAuth, async (req, res) => {
+  const userId = res.locals.userId as string;
+  const { filename, project_id } = req.body as {
+    filename?: string;
+    project_id?: string;
+  };
+  if (!filename)
+    return void res.status(400).json({ detail: "filename is required" });
+
+  const suffix = filename.includes(".")
+    ? filename.split(".").pop()!.toLowerCase()
+    : "";
+  if (!ALLOWED_TYPES.has(suffix))
+    return void res
+      .status(400)
+      .json({ detail: `Unsupported file type: ${suffix}` });
+
+  const db = createServerSupabase();
+  const { data: doc, error } = await db
+    .from("documents")
+    .insert({
+      user_id: userId,
+      project_id: project_id ?? null,
+      filename,
+      file_type: suffix,
+      status: "uploading",
+    })
+    .select("id")
+    .single();
+
+  if (error || !doc)
+    return void res
+      .status(500)
+      .json({ detail: "Failed to create document record" });
+
+  const key = storageKey(userId, doc.id, filename);
+  const contentType =
+    suffix === "pdf"
+      ? "application/pdf"
+      : "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  const uploadUrl = await getPresignedPutUrl(key, contentType);
+
+  if (!uploadUrl)
+    return void res.status(503).json({ detail: "Storage not configured" });
+
+  return void res.json({
+    doc_id: doc.id,
+    upload_url: uploadUrl,
+    storage_key: key,
+    content_type: contentType,
+  });
+});
+
+// POST /single-documents/:documentId/finalize-upload
+// Called after a direct R2 PUT upload completes. Downloads the file from R2,
+// runs structure extraction, optional DOCX→PDF conversion, and creates the
+// V1 document_versions row.
+documentsRouter.post(
+  "/:documentId/finalize-upload",
+  requireAuth,
+  async (req, res) => {
+    const userId = res.locals.userId as string;
+    const { documentId } = req.params;
+    const db = createServerSupabase();
+
+    const { data: doc } = await db
+      .from("documents")
+      .select("id, filename, file_type, user_id, project_id")
+      .eq("id", documentId)
+      .eq("user_id", userId)
+      .single();
+
+    if (!doc)
+      return void res.status(404).json({ detail: "Document not found" });
+
+    const filename = doc.filename as string;
+    const suffix = doc.file_type as string;
+    const key = storageKey(userId, documentId, filename);
+
+    await db
+      .from("documents")
+      .update({ status: "processing" })
+      .eq("id", documentId);
+
+    try {
+      const raw = await downloadFile(key);
+      if (!raw)
+        return void res
+          .status(500)
+          .json({ detail: "File not found in storage — upload may not have completed" });
+
+      const tree = await extractStructureTree(raw, suffix, filename);
+      const pageCount = suffix === "pdf" ? await countPdfPages(raw) : null;
+
+      let pdfStoragePath: string | null = null;
+      if (suffix === "docx" || suffix === "doc") {
+        try {
+          const contentBuf = Buffer.from(raw);
+          const pdfBuf = await docxToPdf(contentBuf);
+          const pdfKey = convertedPdfKey(userId, documentId);
+          await uploadFile(
+            pdfKey,
+            pdfBuf.buffer.slice(
+              pdfBuf.byteOffset,
+              pdfBuf.byteOffset + pdfBuf.byteLength,
+            ) as ArrayBuffer,
+            "application/pdf",
+          );
+          pdfStoragePath = pdfKey;
+        } catch (err) {
+          console.error(`[finalize] DOCX→PDF failed for ${filename}:`, err);
+        }
+      } else if (suffix === "pdf") {
+        pdfStoragePath = key;
+      }
+
+      const { data: versionRow, error: verErr } = await db
+        .from("document_versions")
+        .insert({
+          document_id: documentId,
+          storage_path: key,
+          pdf_storage_path: pdfStoragePath,
+          source: "upload",
+          version_number: 1,
+          display_name: filename,
+        })
+        .select("id")
+        .single();
+
+      if (verErr || !versionRow)
+        throw new Error(`Failed to record version: ${verErr?.message}`);
+
+      await db
+        .from("documents")
+        .update({
+          current_version_id: versionRow.id,
+          size_bytes: raw.byteLength,
+          page_count: pageCount,
+          structure_tree: tree ?? null,
+          status: "ready",
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", documentId);
+
+      const { data: updated } = await db
+        .from("documents")
+        .select("*")
+        .eq("id", documentId)
+        .single();
+
+      const responseDoc = updated
+        ? { ...updated, storage_path: key, pdf_storage_path: pdfStoragePath }
+        : updated;
+      return void res.status(201).json(responseDoc);
+    } catch (e) {
+      await db
+        .from("documents")
+        .update({ status: "error" })
+        .eq("id", documentId);
+      return void res
+        .status(500)
+        .json({ detail: `Processing failed: ${String(e)}` });
+    }
+  },
+);
+
 // DELETE /single-documents/:documentId
 documentsRouter.delete("/:documentId", requireAuth, async (req, res) => {
   const userId = res.locals.userId as string;
@@ -98,7 +246,20 @@ documentsRouter.delete("/:documentId", requireAuth, async (req, res) => {
   if (error || !doc)
     return void res.status(404).json({ detail: "Document not found" });
 
-  await deleteDocumentAndVersionFiles(db, documentId);
+  // Storage now lives on document_versions — fan out and delete each
+  // version's bytes (DOCX + PDF rendition) before dropping rows.
+  const { data: versions } = await db
+    .from("document_versions")
+    .select("storage_path, pdf_storage_path")
+    .eq("document_id", documentId);
+  await Promise.all(
+    (versions ?? []).flatMap((v) =>
+      [v.storage_path, v.pdf_storage_path]
+        .filter((p): p is string => typeof p === "string" && p.length > 0)
+        .map((p) => deleteFile(p).catch(() => {})),
+    ),
+  );
+  await db.from("documents").delete().eq("id", documentId);
   res.status(204).send();
 });
 
@@ -115,7 +276,7 @@ documentsRouter.get("/:documentId/display", requireAuth, async (req, res) => {
 
   const { data: doc } = await db
     .from("documents")
-    .select("id, user_id, project_id")
+    .select("id, filename, file_type, user_id, project_id")
     .eq("id", documentId)
     .single();
   if (!doc)
@@ -128,13 +289,8 @@ documentsRouter.get("/:documentId/display", requireAuth, async (req, res) => {
   if (!active)
     return void res.status(404).json({ detail: "No file available" });
 
-  const fileType = active.file_type ?? "";
+  const fileType = (doc.file_type as string) ?? "";
   const isDocx = fileType === "docx" || fileType === "doc";
-  const displayFilename = downloadFilenameForVersion(
-    active.filename,
-    active.version_number,
-    active.source === "assistant_edit",
-  );
 
   // For DOCX, prefer the per-version PDF rendition if one exists.
   const servePath =
@@ -151,7 +307,7 @@ documentsRouter.get("/:documentId/display", requireAuth, async (req, res) => {
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader(
       "Content-Disposition",
-      buildContentDisposition("inline", displayFilename),
+      buildContentDisposition("inline", doc.filename as string),
     );
     res.send(Buffer.from(raw));
   } else {
@@ -162,7 +318,7 @@ documentsRouter.get("/:documentId/display", requireAuth, async (req, res) => {
     );
     res.setHeader(
       "Content-Disposition",
-      buildContentDisposition("inline", displayFilename),
+      buildContentDisposition("inline", doc.filename as string),
     );
     res.send(Buffer.from(raw));
   }
@@ -180,7 +336,7 @@ documentsRouter.post("/download-zip", requireAuth, async (req, res) => {
   const db = createServerSupabase();
   const { data: rawDocs, error } = await db
     .from("documents")
-    .select("id, current_version_id, user_id, project_id")
+    .select("id, filename, file_type, current_version_id, user_id, project_id")
     .in("id", document_ids);
 
   if (error) return void res.status(500).json({ detail: error.message });
@@ -198,7 +354,7 @@ documentsRouter.post("/download-zip", requireAuth, async (req, res) => {
   );
   const docs = accessChecks
     .filter((x) => x.access.ok)
-    .map((x) => x.doc as { id: string });
+    .map((x) => x.doc as { id: string; filename: string });
   if (!docs || docs.length === 0)
     return void res.status(404).json({ detail: "No documents found" });
 
@@ -211,14 +367,7 @@ documentsRouter.post("/download-zip", requireAuth, async (req, res) => {
       if (!active) return;
       const raw = await downloadFile(active.storage_path);
       if (!raw) return;
-      zip.file(
-        downloadFilenameForVersion(
-          active.filename,
-          active.version_number,
-          active.source === "assistant_edit",
-        ),
-        Buffer.from(raw),
-      );
+      zip.file(doc.filename, Buffer.from(raw));
     }),
   );
 
@@ -240,7 +389,7 @@ documentsRouter.get("/:documentId/url", requireAuth, async (req, res) => {
 
   const { data: doc, error } = await db
     .from("documents")
-    .select("id, user_id, project_id")
+    .select("id, filename, user_id, project_id")
     .eq("id", documentId)
     .single();
   if (error || !doc)
@@ -253,10 +402,10 @@ documentsRouter.get("/:documentId/url", requireAuth, async (req, res) => {
   if (!active)
     return void res.status(404).json({ detail: "No file available" });
 
-  const downloadFilename = downloadFilenameForVersion(
-    active.filename,
+  const downloadFilename = resolveDownloadFilename(
+    doc.filename as string,
+    active.display_name,
     active.version_number,
-    active.source === "assistant_edit",
   );
   const url = await getSignedUrl(
     active.storage_path,
@@ -291,7 +440,7 @@ documentsRouter.get("/:documentId/docx", requireAuth, async (req, res) => {
 
   const { data: doc, error } = await db
     .from("documents")
-    .select("id, user_id, project_id")
+    .select("id, filename, user_id, project_id")
     .eq("id", documentId)
     .single();
   if (error || !doc)
@@ -316,29 +465,51 @@ documentsRouter.get("/:documentId/docx", requireAuth, async (req, res) => {
     "Content-Disposition",
     buildContentDisposition(
       "inline",
-      downloadFilenameForVersion(
-        active.filename,
+      resolveDownloadFilename(
+        doc.filename as string,
+        active.display_name,
         active.version_number,
-        active.source === "assistant_edit",
       ),
     ),
   );
   res.send(Buffer.from(raw));
 });
 
-// Produce the filename a download should present to the user. Version
-// filenames are expected to include the real extension.
-function downloadFilenameForVersion(
-  filename: string | null | undefined,
+// Compose a download-friendly filename that carries the edit version
+// marker: "Purchase Agreement.docx" → "Purchase Agreement [Edited V2].docx".
+// Preserves the original extension (fallback: .docx).
+function versionedFilename(filename: string, version: number | null): string {
+  if (!version || version < 1) return filename;
+  const dot = filename.lastIndexOf(".");
+  const stem = dot > 0 ? filename.slice(0, dot) : filename;
+  const ext = dot > 0 ? filename.slice(dot) : ".docx";
+  return `${stem} [Edited V${version}]${ext}`;
+}
+
+// Produce the filename a download should present to the user for a given
+// (document, version) pair. Prefers the version's display_name (appending
+// the original extension if the user didn't include one), falling back to
+// the versionedFilename heuristic.
+function resolveDownloadFilename(
+  originalFilename: string,
+  displayName: string | null | undefined,
   versionNumber: number | null,
-  edited = false,
 ): string {
-  const resolved = filename?.trim() || "Untitled document.docx";
-  if (!edited || !versionNumber || versionNumber < 1) return resolved;
-  const dot = resolved.lastIndexOf(".");
-  const stem = dot > 0 ? resolved.slice(0, dot) : resolved;
-  const ext = dot > 0 ? resolved.slice(dot) : "";
-  return `${stem} [Edited V${versionNumber}]${ext}`;
+  const dot = originalFilename.lastIndexOf(".");
+  const origExt = dot > 0 ? originalFilename.slice(dot) : "";
+  if (displayName && displayName.trim()) {
+    const trimmed = displayName.trim();
+    const trimmedDot = trimmed.lastIndexOf(".");
+    const hasExt =
+      trimmedDot > 0 &&
+      trimmed
+        .slice(trimmedDot)
+        .toLowerCase()
+        .match(/^\.[a-z0-9]{1,6}$/);
+    if (hasExt) return trimmed;
+    return origExt ? `${trimmed}${origExt}` : trimmed;
+  }
+  return versionedFilename(originalFilename, versionNumber);
 }
 
 // GET /single-documents/:documentId/versions
@@ -363,9 +534,7 @@ documentsRouter.get("/:documentId/versions", requireAuth, async (req, res) => {
 
   const { data: rows } = await db
     .from("document_versions")
-    .select(
-      "id, version_number, source, created_at, filename, file_type, size_bytes, page_count, deleted_at, deleted_by",
-    )
+    .select("id, version_number, source, created_at, display_name")
     .eq("document_id", documentId)
     .order("created_at", { ascending: true });
 
@@ -375,202 +544,10 @@ documentsRouter.get("/:documentId/versions", requireAuth, async (req, res) => {
   });
 });
 
-// POST /single-documents/:documentId/versions/from-document
-// Create a new version of documentId from another existing document's active
-// bytes. This keeps signed storage URLs out of the browser fetch path.
-documentsRouter.post(
-  "/:documentId/versions/from-document",
-  requireAuth,
-  async (req, res) => {
-    const userId = res.locals.userId as string;
-    const userEmail = res.locals.userEmail as string | undefined;
-    const { documentId } = req.params;
-    const sourceDocumentId =
-      typeof req.body?.source_document_id === "string"
-        ? req.body.source_document_id
-        : "";
-    const db = createServerSupabase();
-
-    if (!sourceDocumentId) {
-      return void res
-        .status(400)
-        .json({ detail: "source_document_id is required" });
-    }
-    if (sourceDocumentId === documentId) {
-      return void res
-        .status(400)
-        .json({ detail: "Source and target documents must be different." });
-    }
-
-    const { data: targetDoc } = await db
-      .from("documents")
-      .select("id, user_id, project_id")
-      .eq("id", documentId)
-      .single();
-    if (!targetDoc)
-      return void res.status(404).json({ detail: "Document not found" });
-    const targetAccess = await ensureDocAccess(targetDoc, userId, userEmail, db);
-    if (!targetAccess.ok)
-      return void res.status(404).json({ detail: "Document not found" });
-
-    const { data: sourceDoc } = await db
-      .from("documents")
-      .select("id, user_id, project_id")
-      .eq("id", sourceDocumentId)
-      .single();
-    if (!sourceDoc)
-      return void res.status(404).json({ detail: "Source document not found" });
-    const sourceAccess = await ensureDocAccess(sourceDoc, userId, userEmail, db);
-    if (!sourceAccess.ok)
-      return void res.status(404).json({ detail: "Source document not found" });
-    const willDeleteSource =
-      sourceDoc.project_id &&
-      targetDoc.project_id &&
-      sourceDoc.project_id === targetDoc.project_id;
-    if (willDeleteSource && !sourceAccess.isOwner) {
-      return void res.status(403).json({
-        detail: "Only the source document owner can move it into a version.",
-      });
-    }
-
-    const active = await loadActiveVersion(sourceDocumentId, db);
-    if (!active)
-      return void res
-        .status(404)
-        .json({ detail: "Source document has no active version." });
-    const sourceType = active.file_type ?? "";
-
-    const bytes = await downloadFile(active.storage_path);
-    if (!bytes)
-      return void res
-        .status(404)
-        .json({ detail: "Source document bytes not available." });
-
-    const filename =
-      typeof req.body?.filename === "string" && req.body.filename.trim()
-        ? req.body.filename.trim().slice(0, 200)
-        : active.filename?.trim() || "Untitled document";
-    const suffix =
-      sourceType ||
-      (filename.includes(".") ? filename.split(".").pop()!.toLowerCase() : "");
-    const versionSlug = crypto.randomUUID().replace(/-/g, "");
-    const key = versionStorageKey(userId, documentId, versionSlug, filename);
-    const contentType =
-      suffix === "pdf"
-        ? "application/pdf"
-        : "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-
-    try {
-      await uploadFile(key, bytes, contentType);
-    } catch (e) {
-      console.error("[versions/copy] storage write failed", e);
-      return void res
-        .status(500)
-        .json({ detail: "Failed to create new version." });
-    }
-
-    let pdfStoragePath: string | null = null;
-    if (suffix === "pdf") {
-      pdfStoragePath = key;
-    } else if (active.pdf_storage_path) {
-      if (active.pdf_storage_path === active.storage_path) {
-        pdfStoragePath = key;
-      } else {
-        const pdfBytes = await downloadFile(active.pdf_storage_path);
-        if (pdfBytes) {
-          const pdfKey = `converted-pdfs/${userId}/${documentId}/${versionSlug}.pdf`;
-          await uploadFile(pdfKey, pdfBytes, "application/pdf");
-          pdfStoragePath = pdfKey;
-        }
-      }
-    } else if (suffix === "docx" || suffix === "doc") {
-      try {
-        const pdfBuf = await docxToPdf(Buffer.from(bytes));
-        const pdfKey = `converted-pdfs/${userId}/${documentId}/${versionSlug}.pdf`;
-        await uploadFile(
-          pdfKey,
-          pdfBuf.buffer.slice(
-            pdfBuf.byteOffset,
-            pdfBuf.byteOffset + pdfBuf.byteLength,
-          ) as ArrayBuffer,
-          "application/pdf",
-        );
-        pdfStoragePath = pdfKey;
-      } catch (err) {
-        console.error(
-          `[versions/copy] DOCX→PDF conversion failed for ${filename}:`,
-          err,
-        );
-      }
-    }
-
-    const { data: maxRow } = await db
-      .from("document_versions")
-      .select("version_number")
-      .eq("document_id", documentId)
-      .in("source", ["upload", "user_upload", "assistant_edit"])
-      .order("version_number", { ascending: false, nullsFirst: false })
-      .limit(1)
-      .maybeSingle();
-    const nextVersionNumber =
-      ((maxRow?.version_number as number | null) ?? 1) + 1;
-
-    const { data: versionRow, error: verErr } = await db
-      .from("document_versions")
-      .insert({
-        document_id: documentId,
-        storage_path: key,
-        pdf_storage_path: pdfStoragePath,
-        source: "user_upload",
-        version_number: nextVersionNumber,
-        filename: filename,
-        file_type: sourceType || null,
-        size_bytes: active.size_bytes ?? bytes.byteLength,
-        page_count: active.page_count,
-      })
-      .select("id, version_number, source, created_at, filename")
-      .single();
-    if (verErr || !versionRow) {
-      console.error("[versions/copy] insert failed", verErr);
-      return void res
-        .status(500)
-        .json({ detail: "Failed to record new version." });
-    }
-
-    const { error: updateDocErr } = await db
-      .from("documents")
-      .update({
-        current_version_id: versionRow.id,
-      })
-      .eq("id", documentId);
-    if (updateDocErr) {
-      console.error("[versions/copy] current version update failed", updateDocErr);
-      return void res
-        .status(500)
-        .json({ detail: "Failed to update document current version." });
-    }
-
-    if (willDeleteSource) {
-      const { error: deleteErr } = await deleteDocumentAndVersionFiles(
-        db,
-        sourceDocumentId,
-      );
-      if (deleteErr) {
-        console.error("[versions/copy] source document delete failed", deleteErr);
-        return void res
-          .status(500)
-          .json({ detail: "Failed to delete source document." });
-      }
-    }
-
-    res.status(201).json(versionRow);
-  },
-);
-
 // POST /single-documents/:documentId/versions
 // Upload a brand-new version of an existing document. The uploaded file
-// becomes the new current_version_id. filename defaults to the
-// uploaded filename; client may override via the `filename` form field.
+// becomes the new current_version_id. display_name defaults to the
+// uploaded filename; client may override via the `display_name` form field.
 documentsRouter.post(
   "/:documentId/versions",
   requireAuth,
@@ -587,7 +564,7 @@ documentsRouter.post(
 
     const { data: doc } = await db
       .from("documents")
-      .select("id, user_id, project_id, current_version_id")
+      .select("id, filename, file_type, user_id, project_id")
       .eq("id", documentId)
       .single();
     if (!doc)
@@ -596,12 +573,14 @@ documentsRouter.post(
     if (!access.ok)
       return void res.status(404).json({ detail: "Document not found" });
 
+    // Reject if the uploaded file's extension doesn't match the document's
+    // declared type — otherwise every downstream viewer/extractor breaks.
     const suffix = file.originalname.includes(".")
       ? file.originalname.split(".").pop()!.toLowerCase()
       : "";
-    if (!ALLOWED_TYPES.has(suffix)) {
+    if (doc.file_type && suffix && doc.file_type !== suffix) {
       return void res.status(400).json({
-        detail: `Unsupported file type: ${suffix}. Allowed: pdf, docx, doc`,
+        detail: `Uploaded file type (${suffix}) does not match document type (${doc.file_type}).`,
       });
     }
 
@@ -662,12 +641,6 @@ documentsRouter.post(
       pdfStoragePath = key;
     }
 
-    const rawBuf = file.buffer.buffer.slice(
-      file.buffer.byteOffset,
-      file.buffer.byteOffset + file.buffer.byteLength,
-    ) as ArrayBuffer;
-    const pageCount = suffix === "pdf" ? await countPdfPages(rawBuf) : null;
-
     // Per-document sequential version_number — the upload is V1 and
     // user_upload + assistant_edit count forward from there.
     const { data: maxRow } = await db
@@ -681,10 +654,10 @@ documentsRouter.post(
     const nextVersionNumber =
       ((maxRow?.version_number as number | null) ?? 1) + 1;
 
-    const requestedFilename =
-      typeof req.body?.filename === "string" &&
-      req.body.filename.trim()
-        ? req.body.filename.trim().slice(0, 200)
+    const defaultDisplayName =
+      typeof req.body?.display_name === "string" &&
+      req.body.display_name.trim()
+        ? req.body.display_name.trim().slice(0, 200)
         : file.originalname;
 
     const { data: versionRow, error: verErr } = await db
@@ -695,12 +668,9 @@ documentsRouter.post(
         pdf_storage_path: pdfStoragePath,
         source: "user_upload",
         version_number: nextVersionNumber,
-        filename: requestedFilename,
-        file_type: suffix,
-        size_bytes: file.buffer.byteLength,
-        page_count: pageCount,
+        display_name: defaultDisplayName,
       })
-      .select("id, version_number, source, created_at, filename")
+      .select("id, version_number, source, created_at, display_name")
       .single();
     if (verErr || !versionRow) {
       console.error("[versions/upload] insert failed", verErr);
@@ -709,28 +679,39 @@ documentsRouter.post(
         .json({ detail: "Failed to record new version." });
     }
 
-    const { error: updateDocErr } = await db
-      .from("documents")
-      .update({
-        current_version_id: versionRow.id,
-      })
-      .eq("id", documentId);
-    if (updateDocErr) {
-      console.error(
-        "[versions/upload] current version update failed",
-        updateDocErr,
-      );
-      return void res
-        .status(500)
-        .json({ detail: "Failed to update document current version." });
+    // Also propagate the user-provided display_name to the parent document's
+    // filename so the document's display name stays in sync across the UI.
+    // Preserve a sensible extension: if the display_name has none, append
+    // the uploaded file's extension (fallback: the existing doc's extension).
+    const documentsUpdate: Record<string, unknown> = {
+      current_version_id: versionRow.id,
+    };
+    const providedDisplayName =
+      typeof req.body?.display_name === "string" &&
+      req.body.display_name.trim()
+        ? req.body.display_name.trim().slice(0, 200)
+        : null;
+    if (providedDisplayName) {
+      const hasExt = /\.[a-z0-9]{1,6}$/i.test(providedDisplayName);
+      const existingExt = (doc.filename as string | null)?.match(
+        /\.[a-z0-9]{1,6}$/i,
+      )?.[0];
+      const uploadedExt = suffix ? `.${suffix}` : "";
+      const ext = hasExt ? "" : uploadedExt || existingExt || "";
+      documentsUpdate.filename = `${providedDisplayName}${ext}`;
     }
+    await db
+      .from("documents")
+      .update(documentsUpdate)
+      .eq("id", documentId);
 
     res.status(201).json(versionRow);
   },
 );
 
 // PATCH /single-documents/:documentId/versions/:versionId
-// Rename a version's filename. Pass `{ "filename": "…" }`.
+// Rename a version's display_name. Pass `{ "display_name": "…" }`; an empty
+// or missing value clears the override so the UI falls back to V{n}.
 documentsRouter.patch(
   "/:documentId/versions/:versionId",
   requireAuth,
@@ -751,288 +732,21 @@ documentsRouter.patch(
     if (!access.ok)
       return void res.status(404).json({ detail: "Document not found" });
 
-    const raw = req.body?.filename;
-    const filename =
+    const raw = req.body?.display_name;
+    const displayName =
       typeof raw === "string" && raw.trim() ? raw.trim().slice(0, 200) : null;
 
     const { data: updated, error } = await db
       .from("document_versions")
-      .update({ filename })
+      .update({ display_name: displayName })
       .eq("id", versionId)
       .eq("document_id", documentId)
-      .is("deleted_at", null)
-      .select(
-        "id, version_number, source, created_at, filename, file_type, size_bytes, page_count",
-      )
+      .select("id, version_number, source, created_at, display_name")
       .single();
     if (error || !updated) {
       return void res.status(404).json({ detail: "Version not found" });
     }
     res.json(updated);
-  },
-);
-
-// PUT /single-documents/:documentId/versions/:versionId/file
-// Replace the file bytes and metadata for an existing version while keeping
-// its version number and id. This is destructive and owner-only.
-documentsRouter.put(
-  "/:documentId/versions/:versionId/file",
-  requireAuth,
-  singleFileUpload("file"),
-  async (req, res) => {
-    const userId = res.locals.userId as string;
-    const userEmail = res.locals.userEmail as string | undefined;
-    const { documentId, versionId } = req.params;
-    const db = createServerSupabase();
-
-    const file = req.file;
-    if (!file)
-      return void res.status(400).json({ detail: "file is required" });
-
-    const { data: doc } = await db
-      .from("documents")
-      .select("id, user_id, project_id")
-      .eq("id", documentId)
-      .single();
-    if (!doc)
-      return void res.status(404).json({ detail: "Document not found" });
-    const access = await ensureDocAccess(doc, userId, userEmail, db);
-    if (!access.ok || !access.isOwner)
-      return void res.status(404).json({ detail: "Document not found" });
-
-    const { data: target, error: targetErr } = await db
-      .from("document_versions")
-      .select("id, storage_path, pdf_storage_path, file_type, deleted_at")
-      .eq("id", versionId)
-      .eq("document_id", documentId)
-      .single();
-    if (targetErr || !target)
-      return void res.status(404).json({ detail: "Version not found" });
-    if (target.deleted_at)
-      return void res.status(400).json({ detail: "Version is deleted." });
-
-    const suffix = file.originalname.includes(".")
-      ? file.originalname.split(".").pop()!.toLowerCase()
-      : "";
-    if (!ALLOWED_TYPES.has(suffix)) {
-      return void res.status(400).json({
-        detail: `Unsupported file type: ${suffix}. Allowed: pdf, docx, doc`,
-      });
-    }
-    if (target.file_type && target.file_type !== suffix) {
-      return void res.status(400).json({
-        detail: `Uploaded file type (${suffix}) does not match version type (${target.file_type}).`,
-      });
-    }
-
-    const versionSlug = crypto.randomUUID().replace(/-/g, "");
-    const key = versionStorageKey(
-      userId,
-      documentId,
-      versionSlug,
-      file.originalname,
-    );
-    const contentType =
-      suffix === "pdf"
-        ? "application/pdf"
-        : "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-
-    try {
-      await uploadFile(
-        key,
-        file.buffer.buffer.slice(
-          file.buffer.byteOffset,
-          file.buffer.byteOffset + file.buffer.byteLength,
-        ) as ArrayBuffer,
-        contentType,
-      );
-    } catch (e) {
-      console.error("[versions/replace] storage write failed", e);
-      return void res
-        .status(500)
-        .json({ detail: "Failed to upload replacement version." });
-    }
-
-    let pdfStoragePath: string | null = null;
-    if (suffix === "docx" || suffix === "doc") {
-      try {
-        const pdfBuf = await docxToPdf(file.buffer);
-        const pdfKey = `converted-pdfs/${userId}/${documentId}/${versionSlug}.pdf`;
-        await uploadFile(
-          pdfKey,
-          pdfBuf.buffer.slice(
-            pdfBuf.byteOffset,
-            pdfBuf.byteOffset + pdfBuf.byteLength,
-          ) as ArrayBuffer,
-          "application/pdf",
-        );
-        pdfStoragePath = pdfKey;
-      } catch (err) {
-        console.error(
-          `[versions/replace] DOCX→PDF conversion failed for ${file.originalname}:`,
-          err,
-        );
-      }
-    } else if (suffix === "pdf") {
-      pdfStoragePath = key;
-    }
-
-    const rawBuf = file.buffer.buffer.slice(
-      file.buffer.byteOffset,
-      file.buffer.byteOffset + file.buffer.byteLength,
-    ) as ArrayBuffer;
-    const pageCount = suffix === "pdf" ? await countPdfPages(rawBuf) : null;
-    const requestedFilename =
-      typeof req.body?.filename === "string" && req.body.filename.trim()
-        ? req.body.filename.trim().slice(0, 200)
-        : file.originalname;
-    const uploadedAt = new Date().toISOString();
-
-    const { data: updated, error: updateErr } = await db
-      .from("document_versions")
-      .update({
-        storage_path: key,
-        pdf_storage_path: pdfStoragePath,
-        filename: requestedFilename,
-        file_type: suffix,
-        size_bytes: file.buffer.byteLength,
-        page_count: pageCount,
-        created_at: uploadedAt,
-      })
-      .eq("id", versionId)
-      .eq("document_id", documentId)
-      .select(
-        "id, version_number, source, created_at, filename, file_type, size_bytes, page_count",
-      )
-      .single();
-    if (updateErr || !updated) {
-      await Promise.all(
-        [key, pdfStoragePath]
-          .filter((path): path is string => !!path)
-          .map((path) => deleteFile(path).catch(() => {})),
-      );
-      return void res.status(500).json({
-        detail: updateErr?.message ?? "Failed to replace version.",
-      });
-    }
-
-    await Promise.all(
-      [target.storage_path, target.pdf_storage_path]
-        .filter((path): path is string => !!path)
-        .map((path) => deleteFile(path).catch(() => {})),
-    );
-
-    res.json(updated);
-  },
-);
-
-// DELETE /single-documents/:documentId/versions/:versionId
-// Delete one version. The last remaining version cannot be deleted; if the
-// deleted version is current, the newest remaining version becomes current.
-documentsRouter.delete(
-  "/:documentId/versions/:versionId",
-  requireAuth,
-  async (req, res) => {
-    const userId = res.locals.userId as string;
-    const userEmail = res.locals.userEmail as string | undefined;
-    const { documentId, versionId } = req.params;
-    const db = createServerSupabase();
-
-    const { data: doc } = await db
-      .from("documents")
-      .select("id, user_id, project_id, current_version_id")
-      .eq("id", documentId)
-      .single();
-    if (!doc)
-      return void res.status(404).json({ detail: "Document not found" });
-    const access = await ensureDocAccess(doc, userId, userEmail, db);
-    if (!access.ok || !access.isOwner)
-      return void res.status(404).json({ detail: "Document not found" });
-
-    const { data: versions, error: versionsErr } = await db
-      .from("document_versions")
-      .select(
-        "id, storage_path, pdf_storage_path, version_number, created_at, deleted_at",
-      )
-      .eq("document_id", documentId)
-      .is("deleted_at", null);
-    if (versionsErr) {
-      return void res.status(500).json({ detail: versionsErr.message });
-    }
-
-    const rows = (versions ?? []) as {
-      id: string;
-      storage_path: string | null;
-      pdf_storage_path: string | null;
-      version_number: number | null;
-      created_at: string | null;
-      deleted_at?: string | null;
-    }[];
-    const target = rows.find((row) => row.id === versionId);
-    if (!target)
-      return void res.status(404).json({ detail: "Version not found" });
-    if (rows.length <= 1) {
-      return void res
-        .status(400)
-        .json({ detail: "Cannot delete the only document version." });
-    }
-
-    const remaining = rows
-      .filter((row) => row.id !== versionId)
-      .sort((a, b) => {
-        const versionDelta =
-          (b.version_number ?? -1) - (a.version_number ?? -1);
-        if (versionDelta !== 0) return versionDelta;
-        return (
-          new Date(b.created_at ?? 0).getTime() -
-          new Date(a.created_at ?? 0).getTime()
-        );
-      });
-    const nextCurrentVersionId =
-      doc.current_version_id === versionId
-        ? (remaining[0]?.id ?? null)
-        : doc.current_version_id;
-    const deletedAt = new Date().toISOString();
-
-    if (doc.current_version_id === versionId) {
-      const { error: updateErr } = await db
-        .from("documents")
-        .update({
-          current_version_id: nextCurrentVersionId,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", documentId);
-      if (updateErr) {
-        return void res.status(500).json({ detail: updateErr.message });
-      }
-    }
-
-    const { error: deleteErr } = await db
-      .from("document_versions")
-      .update({
-        storage_path: null,
-        pdf_storage_path: null,
-        deleted_at: deletedAt,
-        deleted_by: userId,
-      })
-      .eq("id", versionId)
-      .eq("document_id", documentId)
-      .is("deleted_at", null);
-    if (deleteErr) {
-      return void res.status(500).json({ detail: deleteErr.message });
-    }
-
-    await Promise.all(
-      [target.storage_path, target.pdf_storage_path]
-        .filter((path): path is string => !!path)
-        .map((path) => deleteFile(path).catch(() => {})),
-    );
-
-    res.json({
-      deleted_version_id: versionId,
-      current_version_id: nextCurrentVersionId,
-      deleted_at: deletedAt,
-    });
   },
 );
 
@@ -1090,7 +804,7 @@ async function handleEditResolution(
   const { documentId, editId } = req.params;
   const db = createServerSupabase();
 
-  devLog(`[edit-resolution] incoming ${mode}`, {
+  console.log(`[edit-resolution] incoming ${mode}`, {
     userId,
     documentId,
     editId,
@@ -1102,31 +816,31 @@ async function handleEditResolution(
     .eq("id", editId)
     .eq("document_id", documentId)
     .single();
-  devLog(`[edit-resolution] fetched edit row`, { edit, editErr });
+  console.log(`[edit-resolution] fetched edit row`, { edit, editErr });
   if (!edit) {
-    devLog(`[edit-resolution] edit not found, returning 404`);
+    console.log(`[edit-resolution] edit not found, returning 404`);
     return void res.status(404).json({ detail: "Edit not found" });
   }
   // Idempotent: if the edit is already resolved, return the current doc
   // state so stale UI (e.g. an old chat reloaded in a new session) can
   // reconcile without throwing.
   if (edit.status !== "pending") {
-    devLog(`[edit-resolution] edit already resolved`, {
+    console.log(`[edit-resolution] edit already resolved`, {
       editId,
       status: edit.status,
     });
     const { data: doc } = await db
       .from("documents")
-      .select("current_version_id, user_id, project_id")
+      .select("current_version_id, filename, user_id, project_id")
       .eq("id", documentId)
       .single();
     if (!doc) {
-      devLog(`[edit-resolution] doc not found for resolved edit`);
+      console.log(`[edit-resolution] doc not found for resolved edit`);
       return void res.status(404).json({ detail: "Document not found" });
     }
     const accessResolved = await ensureDocAccess(doc, userId, userEmail, db);
     if (!accessResolved.ok) {
-      devLog(`[edit-resolution] doc access denied for resolved edit`);
+      console.log(`[edit-resolution] doc access denied for resolved edit`);
       return void res.status(404).json({ detail: "Document not found" });
     }
     const activeForResolved = await loadActiveVersion(documentId, db);
@@ -1138,16 +852,12 @@ async function handleEditResolution(
       download_url: activeForResolved
         ? buildDownloadUrl(
             activeForResolved.storage_path,
-            downloadFilenameForVersion(
-              activeForResolved.filename,
-              activeForResolved.version_number,
-              activeForResolved.source === "assistant_edit",
-            ),
+            (doc.filename as string) ?? "document.docx",
           )
         : null,
       remaining_pending: 0,
     };
-    devLog(`[edit-resolution] returning already-resolved payload`, payload);
+    console.log(`[edit-resolution] returning already-resolved payload`, payload);
     return void res.status(200).json(payload);
   }
 
@@ -1156,7 +866,7 @@ async function handleEditResolution(
     .select("id, current_version_id, user_id, project_id")
     .eq("id", documentId)
     .single();
-  devLog(`[edit-resolution] fetched doc`, { doc, docErr });
+  console.log(`[edit-resolution] fetched doc`, { doc, docErr });
   if (!doc)
     return void res.status(404).json({ detail: "Document not found" });
   const access = await ensureDocAccess(doc, userId, userEmail, db);
@@ -1165,7 +875,7 @@ async function handleEditResolution(
 
   const active = await loadActiveVersion(documentId, db);
   const latestPath = active?.storage_path ?? null;
-  devLog(`[edit-resolution] resolved latestPath`, {
+  console.log(`[edit-resolution] resolved latestPath`, {
     latestPath,
     current_version_id: doc.current_version_id,
   });
@@ -1173,7 +883,7 @@ async function handleEditResolution(
     return void res.status(404).json({ detail: "No file to edit" });
 
   const raw = await downloadFile(latestPath);
-  devLog(`[edit-resolution] downloaded bytes`, {
+  console.log(`[edit-resolution] downloaded bytes`, {
     byteLength: raw?.byteLength ?? 0,
   });
   if (!raw)
@@ -1187,7 +897,7 @@ async function handleEditResolution(
     wIds,
     mode,
   );
-  devLog(`[edit-resolution] resolveTrackedChange result`, {
+  console.log(`[edit-resolution] resolveTrackedChange result`, {
     mode,
     change_id: edit.change_id,
     wIds,
@@ -1195,7 +905,7 @@ async function handleEditResolution(
     resolvedByteLength: resolvedBytes?.byteLength ?? 0,
   });
   if (!found) {
-    devLog(
+    console.log(
       `[edit-resolution] change_id not found in docx — updating status only`,
     );
     // Still update DB status so the UI reflects the decision — the change
@@ -1204,21 +914,22 @@ async function handleEditResolution(
       .from("document_edits")
       .update({ status: mode === "accept" ? "accepted" : "rejected", resolved_at: new Date().toISOString() })
       .eq("id", editId);
-    devLog(`[edit-resolution] status-only update`, { updErr });
+    console.log(`[edit-resolution] status-only update`, { updErr });
+    const { data: filenameRow } = await db
+      .from("documents")
+      .select("filename")
+      .eq("id", documentId)
+      .single();
     const payload = {
       ok: true,
       version_id: doc.current_version_id,
       download_url: buildDownloadUrl(
         latestPath,
-        downloadFilenameForVersion(
-          active?.filename,
-          active?.version_number ?? null,
-          active?.source === "assistant_edit",
-        ),
+        (filenameRow?.filename as string) ?? "document.docx",
       ),
       remaining_pending: 0,
     };
-    devLog(`[edit-resolution] returning not-found payload`, payload);
+    console.log(`[edit-resolution] returning not-found payload`, payload);
     return void res.status(200).json(payload);
   }
 
@@ -1231,7 +942,7 @@ async function handleEditResolution(
     resolvedBytes.byteOffset,
     resolvedBytes.byteOffset + resolvedBytes.byteLength,
   ) as ArrayBuffer;
-  devLog(`[edit-resolution] overwriting bytes in place`, {
+  console.log(`[edit-resolution] overwriting bytes in place`, {
     latestPath,
     byteLength: ab.byteLength,
   });
@@ -1248,7 +959,7 @@ async function handleEditResolution(
       resolved_at: new Date().toISOString(),
     })
     .eq("id", editId);
-  devLog(`[edit-resolution] updated document_edits status`, {
+  console.log(`[edit-resolution] updated document_edits status`, {
     editId,
     newStatus: mode === "accept" ? "accepted" : "rejected",
     statusErr,
@@ -1259,22 +970,23 @@ async function handleEditResolution(
     .select("id", { count: "exact", head: true })
     .eq("document_id", documentId)
     .eq("status", "pending");
-  devLog(`[edit-resolution] remaining pending count`, { remainingPending });
+  console.log(`[edit-resolution] remaining pending count`, { remainingPending });
 
+  const { data: filenameRow } = await db
+    .from("documents")
+    .select("filename")
+    .eq("id", documentId)
+    .single();
   const payload = {
     ok: true,
     version_id: doc.current_version_id,
     download_url: buildDownloadUrl(
       latestPath,
-      downloadFilenameForVersion(
-        active?.filename,
-        active?.version_number ?? null,
-        active?.source === "assistant_edit",
-      ),
+      (filenameRow?.filename as string) ?? "document.docx",
     ),
     remaining_pending: remainingPending ?? 0,
   };
-  devLog(`[edit-resolution] returning success payload`, payload);
+  console.log(`[edit-resolution] returning success payload`, payload);
   res.json(payload);
 }
 
@@ -1317,19 +1029,13 @@ async function handleDocumentUpload(
     .insert({
       project_id: projectId,
       user_id: userId,
+      filename,
+      file_type: suffix,
+      size_bytes: content.byteLength,
       status: "processing",
     })
     .select("*")
     .single();
-
-  if (insertErr || !doc)
-    console.error("[single-documents/upload] failed to create document row", {
-      userId,
-      projectId,
-      filename,
-      suffix,
-      error: insertErr,
-    });
   if (insertErr || !doc)
     return void res
       .status(500)
@@ -1355,6 +1061,7 @@ async function handleDocumentUpload(
       content.byteOffset,
       content.byteOffset + content.byteLength,
     ) as ArrayBuffer;
+    const tree = await extractStructureTree(rawBuf, suffix, filename);
     const pageCount = suffix === "pdf" ? await countPdfPages(rawBuf) : null;
 
     // Convert DOCX/DOC → PDF for display. PDFs are their own rendition.
@@ -1393,10 +1100,7 @@ async function handleDocumentUpload(
         pdf_storage_path: pdfStoragePath,
         source: "upload",
         version_number: 1,
-        filename: filename,
-        file_type: suffix,
-        size_bytes: content.byteLength,
-        page_count: pageCount,
+        display_name: filename,
       })
       .select("id")
       .single();
@@ -1410,6 +1114,9 @@ async function handleDocumentUpload(
       .from("documents")
       .update({
         current_version_id: versionRow.id,
+        size_bytes: content.byteLength,
+        page_count: pageCount,
+        structure_tree: tree ?? null,
         status: "ready",
         updated_at: new Date().toISOString(),
       })
@@ -1422,16 +1129,7 @@ async function handleDocumentUpload(
       .single();
     // Surface storage paths to the caller for backward compatibility.
     const responseDoc = updated
-      ? {
-          ...updated,
-          filename,
-          storage_path: key,
-          pdf_storage_path: pdfStoragePath,
-          file_type: suffix,
-          size_bytes: content.byteLength,
-          page_count: pageCount,
-          active_version_number: 1,
-        }
+      ? { ...updated, storage_path: key, pdf_storage_path: pdfStoragePath }
       : updated;
     return void res.status(201).json(responseDoc);
   } catch (e) {
@@ -1451,6 +1149,49 @@ async function countPdfPages(buf: ArrayBuffer): Promise<number | null> {
     ) => Promise<{ numpages: number }>;
     const data = await pdfParse(Buffer.from(buf), { max: 1 });
     return data.numpages;
+  } catch {
+    return null;
+  }
+}
+
+async function extractStructureTree(
+  content: ArrayBuffer,
+  fileType: string,
+  _filename: string,
+): Promise<unknown[] | null> {
+  try {
+    if (fileType === "pdf") {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const pdfParse = require("pdf-parse/lib/pdf-parse.js") as (
+        buffer: Buffer,
+        options?: { max?: number }
+      ) => Promise<{ numpages: number }>;
+      const data = await pdfParse(Buffer.from(content), { max: 1 });
+      if (data.numpages <= 5) return null;
+      return Array.from({ length: data.numpages }, (_, i) => ({
+        id: `page-${i + 1}`,
+        title: `Page ${i + 1}`,
+        level: 1,
+        page_number: i + 1,
+        children: [],
+      }));
+    } else {
+      const mammoth = await import("mammoth");
+      const result = await mammoth.extractRawText({
+        buffer: Buffer.from(content),
+      });
+      const lines = result.value.split("\n").filter((l) => l.trim());
+      const nodes = lines
+        .slice(0, 30)
+        .map((line, i) => ({
+          id: `h1-${i}`,
+          title: line.slice(0, 100),
+          level: 1,
+          page_number: null,
+          children: [],
+        }));
+      return nodes.length ? nodes : null;
+    }
   } catch {
     return null;
   }
