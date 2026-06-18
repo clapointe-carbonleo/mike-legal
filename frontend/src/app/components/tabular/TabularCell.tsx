@@ -7,6 +7,7 @@ import { AlertCircle, Expand } from "lucide-react";
 import type { ColumnConfig, TabularCell as TCell } from "../shared/types";
 import { preprocessCitations, type ParsedCitation } from "./citation-utils";
 import { getPillClass } from "./pillUtils";
+import { SkeletonLine } from "../shared/TablePrimitive";
 
 interface Props {
     cell: TCell;
@@ -17,10 +18,18 @@ interface Props {
 
 const FLAG_STYLES = {
     green: "bg-green-500",
-    grey: "bg-[#C7C7B2]",
+    grey: "bg-gray-400",
     yellow: "bg-amber-400",
     red: "bg-red-500",
 } as const;
+
+function TabularCellSkeleton() {
+    return (
+        <div className="flex h-10 items-center px-2">
+            <SkeletonLine className="h-3.5 w-full" />
+        </div>
+    );
+}
 
 // Replace citations and pills with inline-code tokens so ReactMarkdown passes
 // them through its `code` component, where we render the final UI.
@@ -83,7 +92,7 @@ function CellMarkdown({
                         href={href}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="text-[#898344] hover:text-[#536049] underline"
+                        className="text-blue-600 hover:text-blue-700 underline"
                         {...props}
                     >
                         {children}
@@ -110,7 +119,7 @@ function CellMarkdown({
                                             onExpand();
                                         }
                                     }}
-                                    className="mx-0.5 inline-flex items-center justify-center rounded-full bg-[#C7C7B2]/40 w-3.5 h-3.5 text-[9px] font-medium text-[#292629]/80 align-super cursor-pointer hover:bg-[#C7C7B2] transition-colors"
+                                    className="mx-0.5 inline-flex items-center justify-center rounded-full bg-gray-200 w-3.5 h-3.5 text-[9px] font-medium text-gray-700 align-super cursor-pointer hover:bg-gray-300 transition-colors"
                                 >
                                     {idx + 1}
                                 </span>
@@ -132,7 +141,7 @@ function CellMarkdown({
                     }
                     return (
                         <code
-                            className="bg-[#F5F5F5] px-1 py-0.5 rounded text-[11px] font-mono"
+                            className="bg-gray-100 px-1 py-0.5 rounded text-[11px] font-mono"
                             {...props}
                         >
                             {children}
@@ -171,16 +180,12 @@ export function TabularCell({
     }, [inlineExpanded]);
 
     if (cell.status === "generating") {
-        return (
-            <div className="h-10 px-2 flex items-center">
-                <div className="h-4 w-full rounded bg-[#F5F5F5] animate-pulse" />
-            </div>
-        );
+        return <TabularCellSkeleton />;
     }
 
     if (cell.status === "error") {
         return (
-            <div className="h-10 flex items-center justify-center text-[#292629]/30">
+            <div className="h-10 flex items-center justify-center text-gray-300">
                 <AlertCircle className="h-4 w-4 text-red-300" />
             </div>
         );
@@ -211,7 +216,7 @@ export function TabularCell({
         <div ref={containerRef} className="relative">
             {/* Normal cell row — always visible, preserves table layout */}
             <div
-                className="group relative h-10 px-2 flex items-center text-xs text-[#292629]/90 leading-relaxed cursor-pointer hover:bg-[#F5F5F5] transition-colors"
+                className="group relative h-10 px-2 flex items-center text-xs text-gray-800 leading-relaxed cursor-pointer hover:bg-gray-50 transition-colors"
                 onClick={() => setInlineExpanded((v) => !v)}
             >
                 {cell.content.flag && (
@@ -235,8 +240,8 @@ export function TabularCell({
 
             {/* Inline expanded overlay — absolutely positioned so it overlays without disrupting table layout */}
             {inlineExpanded && (
-                <div className="absolute left-0 top-0 z-50 w-full bg-white border border-[#C7C7B2] shadow-lg rounded-sm">
-                    <div className="relative p-2 pr-4 text-xs text-[#292629]/90 leading-relaxed">
+                <div className="absolute left-0 top-0 z-50 w-full bg-white border border-gray-200 shadow-lg rounded-sm">
+                    <div className="relative p-2 pr-4 text-xs text-gray-800 leading-relaxed">
                         {cell.content.flag && (
                             <span
                                 className={`absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full ${FLAG_STYLES[cell.content.flag]}`}
@@ -255,7 +260,7 @@ export function TabularCell({
                     <div className="px-2 py-1.5 flex items-center justify-end">
                         <button
                             onClick={handleSeeDetails}
-                            className="flex items-center gap-1 text-xs text-[#292629]/40 hover:text-[#292629]/80 transition-colors"
+                            className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-700 transition-colors"
                         >
                             <Expand className="h-3 w-3" />
                             See details

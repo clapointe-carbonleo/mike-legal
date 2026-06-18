@@ -1,12 +1,12 @@
 "use client";
 
 import { FileText, File, X, AlertCircle, Loader2 } from "lucide-react";
-import type { MikeDocument } from "./types";
+import type { Document } from "./types";
 
 interface Props {
-  document: MikeDocument;
+  document: Document;
   onRemove?: (id: string) => void;
-  onClick?: (doc: MikeDocument) => void;
+  onClick?: (doc: Document) => void;
   selected?: boolean;
 }
 
@@ -15,9 +15,9 @@ function FileIcon({ fileType }: { fileType: string | null }) {
     return <FileText className="h-4 w-4 text-red-600 shrink-0" />;
   }
   if (fileType === "docx" || fileType === "doc") {
-    return <File className="h-4 w-4 text-[#898344] shrink-0" />;
+    return <File className="h-4 w-4 text-blue-600 shrink-0" />;
   }
-  return <File className="h-4 w-4 text-[#292629]/50 shrink-0" />;
+  return <File className="h-4 w-4 text-gray-500 shrink-0" />;
 }
 
 function formatBytes(bytes: number): string {
@@ -29,6 +29,7 @@ function formatBytes(bytes: number): string {
 export function DocumentCard({ document, onRemove, onClick, selected }: Props) {
   const isError = document.status === "error";
   const isProcessing = document.status === "pending" || document.status === "processing";
+  const filename = document.filename;
 
   return (
     <div
@@ -37,14 +38,14 @@ export function DocumentCard({ document, onRemove, onClick, selected }: Props) {
         "flex items-center gap-2.5 rounded-lg border px-3 py-2.5 text-sm transition-colors",
         onClick ? "cursor-pointer" : "",
         selected
-          ? "border-[#898344] bg-[#F5F5F5]"
+          ? "border-blue-500 bg-blue-50"
           : isError
           ? "border-red-200 bg-red-50"
-          : "border-[#C7C7B2] bg-white hover:border-[#C7C7B2]",
+          : "border-gray-200 bg-white hover:border-gray-300",
       ].join(" ")}
     >
       {isProcessing ? (
-        <Loader2 className="h-4 w-4 animate-spin text-[#292629]/40 shrink-0" />
+        <Loader2 className="h-4 w-4 animate-spin text-gray-400 shrink-0" />
       ) : isError ? (
         <AlertCircle className="h-4 w-4 text-red-500 shrink-0" />
       ) : (
@@ -52,10 +53,10 @@ export function DocumentCard({ document, onRemove, onClick, selected }: Props) {
       )}
 
       <div className="min-w-0 flex-1">
-        <p className="truncate font-medium text-[#292629]/90" title={document.filename}>
-          {document.filename}
+        <p className="truncate font-medium text-gray-800" title={filename}>
+          {filename}
         </p>
-        <p className="text-xs text-[#292629]/40">
+        <p className="text-xs text-gray-400">
           {isProcessing
             ? "Processing…"
             : isError
@@ -75,7 +76,7 @@ export function DocumentCard({ document, onRemove, onClick, selected }: Props) {
             e.stopPropagation();
             onRemove(document.id);
           }}
-          className="shrink-0 rounded p-0.5 text-[#292629]/40 hover:bg-[#F5F5F5] hover:text-[#292629]/60"
+          className="shrink-0 rounded p-0.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
           aria-label="Remove document"
         >
           <X className="h-3.5 w-3.5" />

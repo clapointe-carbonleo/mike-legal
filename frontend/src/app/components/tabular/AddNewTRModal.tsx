@@ -1,9 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
-import { Check, ChevronDown, Loader2, Upload, X } from "lucide-react";
-import type { MikeDocument, MikeProject, MikeWorkflow } from "../shared/types";
+import { Check, ChevronDown, Loader2, Upload } from "lucide-react";
+import type { Document, Project, Workflow } from "../shared/types";
 import {
     getProject,
     listProjects,
@@ -14,6 +13,7 @@ import {
 } from "@/app/lib/mikeApi";
 import { FileDirectory } from "../shared/FileDirectory";
 import { BUILT_IN_WORKFLOWS } from "../workflows/builtinWorkflows";
+import { Modal } from "../shared/Modal";
 
 interface Props {
     open: boolean;
@@ -22,11 +22,11 @@ interface Props {
         title: string,
         projectId?: string,
         documentIds?: string[],
-        columnsConfig?: MikeWorkflow["columns_config"],
+        columnsConfig?: Workflow["columns_config"],
     ) => void;
-    projects?: MikeProject[];
+    projects?: Project[];
     /** When provided, skip the project/directory picker and show only these docs */
-    projectDocs?: MikeDocument[];
+    projectDocs?: Document[];
     projectName?: string;
     projectCmNumber?: string | null;
 }
@@ -47,12 +47,12 @@ export function AddNewTRModal({
     const [projectDropdownOpen, setProjectDropdownOpen] = useState(false);
 
     // Project-scoped docs (when underProject is true and no fixedProjectDocs)
-    const [projectDocs, setProjectDocs] = useState<MikeDocument[]>([]);
+    const [projectDocs, setProjectDocs] = useState<Document[]>([]);
     const [loadingDocs, setLoadingDocs] = useState(false);
 
     // Full directory (when underProject is false)
-    const [standaloneDocs, setStandaloneDocs] = useState<MikeDocument[]>([]);
-    const [directoryProjects, setDirectoryProjects] = useState<MikeProject[]>(
+    const [standaloneDocs, setStandaloneDocs] = useState<Document[]>([]);
+    const [directoryProjects, setDirectoryProjects] = useState<Project[]>(
         [],
     );
     const [loadingDirectory, setLoadingDirectory] = useState(false);
@@ -64,12 +64,13 @@ export function AddNewTRModal({
     const fileInputRef = useRef<HTMLInputElement>(null);
 
     // Workflow templates
-    const [workflows, setWorkflows] = useState<MikeWorkflow[]>([]);
+    const [workflows, setWorkflows] = useState<Workflow[]>([]);
     const [loadingWorkflows, setLoadingWorkflows] = useState(false);
     const [selectedWorkflowId, setSelectedWorkflowId] = useState<string | null>(
         null,
     );
     const [workflowDropdownOpen, setWorkflowDropdownOpen] = useState(false);
+    const formId = "new-tabular-review-modal-form";
 
     useEffect(() => {
         if (!open) return;
@@ -205,7 +206,7 @@ export function AddNewTRModal({
         : underProject
           ? []
           : directoryProjects;
-    const flatProjectDocs: MikeDocument[] =
+    const flatProjectDocs: Document[] =
         !isProjectMode && underProject ? projectDocs : [];
     const directoryLoading = isProjectMode
         ? false
@@ -213,60 +214,63 @@ export function AddNewTRModal({
           ? loadingDocs
           : loadingDirectory;
     const showDirectory = isProjectMode || !underProject || !!selectedProjectId;
+    const breadcrumbs =
+        isProjectMode && projectName
+            ? [
+                  "Projects",
+                  `${projectName}${projectCmNumber ? ` (#${projectCmNumber})` : ""}`,
+                  "New Tabular Review",
+              ]
+            : ["Tabular Reviews", "New Tabular Review"];
 
-    return createPortal(
-        <div className="fixed inset-0 z-[101] flex items-center justify-center bg-[#292629]/20 backdrop-blur-xs">
-            <div className="w-full max-w-2xl rounded-2xl bg-white shadow-2xl flex flex-col h-[600px]">
-                {/* Header */}
-                <div className="flex items-center justify-between px-6 pt-5 pb-2 shrink-0">
-                    <div className="flex items-center gap-1.5 text-xs text-[#292629]/40">
-                        {isProjectMode && projectName ? (
-                            <>
-                                <span>Projects</span>
-                                <span>›</span>
-                                <span>
-                                    {projectName}
-                                    {projectCmNumber ? ` (#${projectCmNumber})` : ""}
-                                </span>
-                                <span>›</span>
-                                <span>Tabular Reviews</span>
-                                <span>›</span>
-                                <span>New review</span>
-                            </>
-                        ) : (
-                            <>
-                                <span>Tabular Reviews</span>
-                                <span>›</span>
-                                <span>New review</span>
-                            </>
-                        )}
-                    </div>
-                    <button
-                        onClick={handleClose}
-                        className="rounded-lg p-1.5 text-[#292629]/40 hover:bg-[#F5F5F5] hover:text-[#292629]/60 transition-colors"
-                    >
-                        <X className="h-4 w-4" />
-                    </button>
-                </div>
-
-                <form
-                    onSubmit={handleSubmit}
-                    className="flex flex-col min-h-0 flex-1"
-                >
-                    <div className="px-6 pt-3 pb-4 space-y-5 overflow-y-auto flex-1">
-                        {/* Title */}
-                        <input
-                            type="text"
-                            value={title}
-                            onChange={(e) => setTitle(e.target.value)}
-                            placeholder="Review name"
-                            className="w-full text-2xl font-sans text-[#292629]/90 placeholder-[#C7C7B2] focus:outline-none bg-transparent"
-                            autoFocus
-                        />
+    return (
+        <Modal
+            open={open}
+            onClose={handleClose}
+            breadcrumbs={breadcrumbs}
+            secondaryAction={{
+                label: uploading ? "Uploading…" : "Upload",
+                icon: uploading ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                    <Upload className="h-3.5 w-3.5" />
+                ),
+                onClick: () => fileInputRef.current?.click(),
+                disabled: uploading,
+            }}
+            primaryAction={{
+                label: "Create",
+                type: "submit",
+                form: formId,
+                disabled: !title.trim() || (underProject && !selectedProjectId),
+            }}
+        >
+            <input
+                ref={fileInputRef}
+                type="file"
+                accept=".pdf,.docx,.doc"
+                multiple
+                className="hidden"
+                onChange={handleUpload}
+            />
+            <form
+                id={formId}
+                onSubmit={handleSubmit}
+                className="flex flex-col min-h-0 flex-1"
+            >
+                <div className="space-y-5">
+                    <input
+                        type="text"
+                        value={title}
+                        onChange={(e) => setTitle(e.target.value)}
+                        placeholder="Review name"
+                        className="w-full text-2xl font-serif text-gray-800 placeholder-gray-400 focus:outline-none bg-transparent"
+                        autoFocus
+                    />
 
                         {/* Workflow template */}
                         <div className="space-y-2">
-                            <p className="text-xs font-medium text-[#292629]/80">
+                            <p className="text-xs font-medium text-gray-700">
                                 Workflow Template
                             </p>
                             <div className="relative">
@@ -276,17 +280,17 @@ export function AddNewTRModal({
                                         setWorkflowDropdownOpen((o) => !o)
                                     }
                                     disabled={loadingWorkflows}
-                                    className="flex items-center justify-between w-full rounded-lg border border-[#C7C7B2] px-3 py-2 text-sm hover:border-[#C7C7B2] focus:outline-none bg-white transition-colors"
+                                    className="flex items-center justify-between w-full rounded-lg border border-gray-200 px-3 py-2 text-sm hover:border-gray-400 focus:outline-none bg-white transition-colors"
                                 >
                                     <div className="flex items-center gap-2 min-w-0">
                                         {loadingWorkflows && (
-                                            <Loader2 className="h-3.5 w-3.5 animate-spin text-[#292629]/40 shrink-0" />
+                                            <Loader2 className="h-3.5 w-3.5 animate-spin text-gray-400 shrink-0" />
                                         )}
                                         <span
                                             className={
                                                 selectedWorkflow
-                                                    ? "text-[#292629]/90 truncate"
-                                                    : "text-[#292629]/40"
+                                                    ? "text-gray-800 truncate"
+                                                    : "text-gray-400"
                                             }
                                         >
                                             {loadingWorkflows
@@ -296,27 +300,27 @@ export function AddNewTRModal({
                                                   : "No template — start from scratch"}
                                         </span>
                                     </div>
-                                    <ChevronDown className="h-3.5 w-3.5 text-[#292629]/40 shrink-0 ml-2" />
+                                    <ChevronDown className="h-3.5 w-3.5 text-gray-400 shrink-0 ml-2" />
                                 </button>
                                 {workflowDropdownOpen && !loadingWorkflows && (
-                                    <div className="absolute left-0 top-full z-20 mt-1 w-full rounded-xl border border-[#C7C7B2]/50 bg-white shadow-lg overflow-y-auto max-h-52">
+                                    <div className="absolute left-0 top-full z-20 mt-1 w-full rounded-xl border border-gray-100 bg-white shadow-lg overflow-y-auto max-h-52">
                                         <button
                                             type="button"
                                             onClick={() => {
                                                 setSelectedWorkflowId(null);
                                                 setWorkflowDropdownOpen(false);
                                             }}
-                                            className={`w-full text-left flex items-center gap-2 px-3 py-2 text-sm transition-colors hover:bg-[#F5F5F5] ${!selectedWorkflowId ? "bg-[#F5F5F5] text-[#292629]" : "text-[#292629]/50"}`}
+                                            className={`w-full text-left flex items-center gap-2 px-3 py-2 text-sm transition-colors hover:bg-gray-50 ${!selectedWorkflowId ? "bg-gray-50 text-gray-900" : "text-gray-500"}`}
                                         >
                                             <span className="flex-1">
                                                 No template — start from scratch
                                             </span>
                                             {!selectedWorkflowId && (
-                                                <Check className="h-3.5 w-3.5 text-[#292629]/50 shrink-0" />
+                                                <Check className="h-3.5 w-3.5 text-gray-500 shrink-0" />
                                             )}
                                         </button>
                                         {workflows.length > 0 && (
-                                            <div className="border-t border-[#C7C7B2]/50" />
+                                            <div className="border-t border-gray-100" />
                                         )}
                                         {workflows.map((wf) => (
                                             <button
@@ -330,14 +334,14 @@ export function AddNewTRModal({
                                                         false,
                                                     );
                                                 }}
-                                                className={`w-full text-left flex items-center gap-2 px-3 py-2 text-sm transition-colors hover:bg-[#F5F5F5] ${selectedWorkflowId === wf.id ? "bg-[#F5F5F5] text-[#292629]" : "text-[#292629]/80"}`}
+                                                className={`w-full text-left flex items-center gap-2 px-3 py-2 text-sm transition-colors hover:bg-gray-50 ${selectedWorkflowId === wf.id ? "bg-gray-50 text-gray-900" : "text-gray-700"}`}
                                             >
                                                 <span className="flex-1 truncate">
                                                     {wf.title}
                                                 </span>
                                                 {selectedWorkflowId ===
                                                     wf.id && (
-                                                    <Check className="h-3.5 w-3.5 text-[#292629]/50 shrink-0" />
+                                                    <Check className="h-3.5 w-3.5 text-gray-500 shrink-0" />
                                                 )}
                                             </button>
                                         ))}
@@ -363,13 +367,13 @@ export function AddNewTRModal({
                                 className="flex items-center gap-2.5 w-fit"
                             >
                                 <span
-                                    className={`relative inline-flex h-5 w-9 shrink-0 rounded-full transition-colors duration-200 ${underProject ? "bg-[#292629]" : "bg-[#C7C7B2]/40"}`}
+                                    className={`relative inline-flex h-5 w-9 shrink-0 rounded-full transition-colors duration-200 ${underProject ? "bg-gray-900" : "bg-gray-200"}`}
                                 >
                                     <span
                                         className={`absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform duration-200 ${underProject ? "translate-x-4" : "translate-x-0"}`}
                                     />
                                 </span>
-                                <span className="text-sm text-[#292629]/60">
+                                <span className="text-sm text-gray-600">
                                     Create under a project
                                 </span>
                             </button>
@@ -381,13 +385,13 @@ export function AddNewTRModal({
                                         onClick={() =>
                                             setProjectDropdownOpen((o) => !o)
                                         }
-                                        className="flex items-center justify-between w-full rounded-lg border border-[#C7C7B2] px-3 py-2 text-sm hover:border-[#C7C7B2] focus:outline-none bg-white transition-colors"
+                                        className="flex items-center justify-between w-full rounded-lg border border-gray-200 px-3 py-2 text-sm hover:border-gray-400 focus:outline-none bg-white transition-colors"
                                     >
                                         <span
                                             className={
                                                 selectedProject
-                                                    ? "text-[#292629]/90"
-                                                    : "text-[#292629]/40"
+                                                    ? "text-gray-800"
+                                                    : "text-gray-400"
                                             }
                                         >
                                             {selectedProject
@@ -397,12 +401,12 @@ export function AddNewTRModal({
                                                       : "")
                                                 : "Select project…"}
                                         </span>
-                                        <ChevronDown className="h-3.5 w-3.5 text-[#292629]/40 shrink-0" />
+                                        <ChevronDown className="h-3.5 w-3.5 text-gray-400 shrink-0" />
                                     </button>
                                     {projectDropdownOpen && (
-                                        <div className="absolute left-0 top-full z-20 mt-1 w-full rounded-xl border border-[#C7C7B2]/50 bg-white shadow-lg overflow-y-auto max-h-48">
+                                        <div className="absolute left-0 top-full z-20 mt-1 w-full rounded-xl border border-gray-100 bg-white shadow-lg overflow-y-auto max-h-48">
                                             {projects.length === 0 ? (
-                                                <p className="px-3 py-2 text-xs text-[#292629]/40">
+                                                <p className="px-3 py-2 text-xs text-gray-400">
                                                     No projects found
                                                 </p>
                                             ) : (
@@ -415,12 +419,12 @@ export function AddNewTRModal({
                                                                 p.id,
                                                             )
                                                         }
-                                                        className={`w-full text-left flex items-center justify-between px-3 py-2 text-sm transition-colors hover:bg-[#F5F5F5] ${selectedProjectId === p.id ? "bg-[#F5F5F5] text-[#292629]" : "text-[#292629]/80"}`}
+                                                        className={`w-full text-left flex items-center justify-between px-3 py-2 text-sm transition-colors hover:bg-gray-50 ${selectedProjectId === p.id ? "bg-gray-50 text-gray-900" : "text-gray-700"}`}
                                                     >
                                                         <span className="truncate">
                                                             {p.name}
                                                             {p.cm_number && (
-                                                                <span className="ml-1 text-[#292629]/40">
+                                                                <span className="ml-1 text-gray-400">
                                                                     (#
                                                                     {
                                                                         p.cm_number
@@ -431,7 +435,7 @@ export function AddNewTRModal({
                                                         </span>
                                                         {selectedProjectId ===
                                                             p.id && (
-                                                            <Check className="h-3.5 w-3.5 text-[#292629]/50 shrink-0" />
+                                                            <Check className="h-3.5 w-3.5 text-gray-500 shrink-0" />
                                                         )}
                                                     </button>
                                                 ))
@@ -445,7 +449,7 @@ export function AddNewTRModal({
                         {/* File directory */}
                         {showDirectory && (
                             <div className="space-y-2">
-                                <p className="text-xs font-medium text-[#292629]/80">
+                                <p className="text-xs font-medium text-gray-700">
                                     Select Documents
                                 </p>
                                 <div>
@@ -477,56 +481,8 @@ export function AddNewTRModal({
                                 </div>
                             </div>
                         )}
-                    </div>
-
-                    {/* Footer */}
-                    <div className="flex items-center justify-between gap-2 border-t border-[#C7C7B2]/50 px-6 py-4 shrink-0">
-                        <div>
-                            <input
-                                ref={fileInputRef}
-                                type="file"
-                                accept=".pdf,.docx,.doc"
-                                multiple
-                                className="hidden"
-                                onChange={handleUpload}
-                            />
-                            <button
-                                type="button"
-                                onClick={() => fileInputRef.current?.click()}
-                                disabled={uploading}
-                                className="flex items-center gap-1.5 rounded-lg border border-[#C7C7B2] px-3 py-1.5 text-sm text-[#292629]/60 hover:bg-[#F5F5F5] disabled:opacity-50 transition-colors"
-                            >
-                                {uploading ? (
-                                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                ) : (
-                                    <Upload className="h-3.5 w-3.5" />
-                                )}
-                                {uploading ? "Uploading…" : "Upload"}
-                            </button>
-                        </div>
-                        <div className="flex items-center gap-2">
-                            <button
-                                type="button"
-                                onClick={handleClose}
-                                className="rounded-lg px-4 py-2 text-sm text-[#292629]/50 hover:bg-[#F5F5F5] transition-colors"
-                            >
-                                Cancel
-                            </button>
-                            <button
-                                type="submit"
-                                disabled={
-                                    !title.trim() ||
-                                    (underProject && !selectedProjectId)
-                                }
-                                className="rounded-lg bg-[#292629] px-5 py-2 text-sm font-medium text-white hover:bg-[#292629]/90 disabled:opacity-40 transition-colors"
-                            >
-                                Create
-                            </button>
-                        </div>
-                    </div>
-                </form>
-            </div>
-        </div>,
-        document.body,
+                </div>
+            </form>
+        </Modal>
     );
 }

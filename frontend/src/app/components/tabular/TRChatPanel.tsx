@@ -4,13 +4,13 @@ import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
-    X,
     Clock,
     MessageSquarePlus,
     Search,
     Square,
     ArrowRight,
     ChevronDown,
+    ChevronLeft,
     Trash2,
 } from "lucide-react";
 import { MikeIcon } from "@/components/chat/mike-icon";
@@ -23,11 +23,7 @@ import {
     type TRChat,
     type TRCitationAnnotation,
 } from "@/app/lib/mikeApi";
-import type {
-    AssistantEvent,
-    ColumnConfig,
-    MikeDocument,
-} from "../shared/types";
+import type { AssistantEvent, ColumnConfig, Document } from "../shared/types";
 import { ModelToggle } from "../assistant/ModelToggle";
 import { ApiKeyMissingModal } from "../shared/ApiKeyMissingModal";
 import { PreResponseWrapper } from "../shared/PreResponseWrapper";
@@ -37,6 +33,8 @@ import {
     isModelAvailable,
     type ModelProvider,
 } from "@/app/lib/modelAvailability";
+import type { ApiKeyState } from "@/app/lib/mikeApi";
+import { cn } from "@/lib/utils";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -50,12 +48,64 @@ interface TRMessage {
     isStreaming?: boolean;
 }
 
+function parseCourtlistenerEventCases(value: unknown) {
+    if (!Array.isArray(value)) return undefined;
+    return value
+        .map((item) => {
+            if (!item || typeof item !== "object" || Array.isArray(item)) {
+                return null;
+            }
+            const row = item as Record<string, unknown>;
+            return {
+                cluster_id:
+                    typeof row.cluster_id === "number" ? row.cluster_id : 0,
+                case_name:
+                    typeof row.case_name === "string" ? row.case_name : null,
+                citation:
+                    typeof row.citation === "string" ? row.citation : null,
+                dateFiled:
+                    typeof row.dateFiled === "string" ? row.dateFiled : null,
+                url: typeof row.url === "string" ? row.url : null,
+            };
+        })
+        .filter(
+            (item): item is NonNullable<typeof item> =>
+                !!item && item.cluster_id > 0,
+        );
+}
+
+function parseCourtlistenerCaseSearches(value: unknown) {
+    if (!Array.isArray(value)) return undefined;
+    return value
+        .map((item) => {
+            if (!item || typeof item !== "object" || Array.isArray(item)) {
+                return null;
+            }
+            const row = item as Record<string, unknown>;
+            return {
+                cluster_id:
+                    typeof row.cluster_id === "number" ? row.cluster_id : null,
+                query: typeof row.query === "string" ? row.query : "",
+                total_matches:
+                    typeof row.total_matches === "number"
+                        ? row.total_matches
+                        : 0,
+                case_name:
+                    typeof row.case_name === "string" ? row.case_name : null,
+                citation:
+                    typeof row.citation === "string" ? row.citation : null,
+                error: typeof row.error === "string" ? row.error : undefined,
+            };
+        })
+        .filter((item): item is NonNullable<typeof item> => !!item);
+}
+
 interface Props {
     reviewId: string;
     reviewTitle?: string | null;
     projectName?: string | null;
     columns: ColumnConfig[];
-    documents: MikeDocument[];
+    documents: Document[];
     onCitationClick: (colIdx: number, rowIdx: number) => void;
     onClose: () => void;
     initialChatId?: string | null;
@@ -72,6 +122,8 @@ const THINKING_PHRASES = [
     "Analyzing...",
     "Reasoning...",
 ];
+const REASONING_COLLAPSED_MAX_LINES = 6;
+const REASONING_COLLAPSED_MAX_HEIGHT_REM = 9;
 
 function ReasoningBlock({
     text,
@@ -81,7 +133,11 @@ function ReasoningBlock({
     isStreaming: boolean;
 }) {
     const [isOpen, setIsOpen] = useState(false);
+    const [userToggled, setUserToggled] = useState(false);
+    const [isOverflowing, setIsOverflowing] = useState(false);
+    const [hasMeasured, setHasMeasured] = useState(false);
     const [phraseIdx, setPhraseIdx] = useState(0);
+    const contentRef = useRef<HTMLDivElement | null>(null);
 
     useEffect(() => {
         if (!isStreaming) return;
@@ -92,16 +148,34 @@ function ReasoningBlock({
         return () => clearInterval(interval);
     }, [isStreaming]);
 
+    useEffect(() => {
+        const el = contentRef.current;
+        if (!el) return;
+        const lineHeight = parseFloat(getComputedStyle(el).lineHeight) || 24;
+        const maxHeight = lineHeight * REASONING_COLLAPSED_MAX_LINES;
+        const nextOverflowing = el.scrollHeight > maxHeight + 2;
+        setIsOverflowing(nextOverflowing);
+        setHasMeasured(true);
+        if (nextOverflowing && !userToggled) setIsOpen(false);
+    }, [text, userToggled]);
+
+    const showContent = isOpen || isStreaming || isOverflowing || !hasMeasured;
+    const isCollapsed = isOverflowing && !isOpen;
+
     return (
         <div className="ml-1">
             <button
-                onClick={() => !isStreaming && setIsOpen((v) => !v)}
-                className="flex items-center text-sm text-[#292629]/40 hover:text-[#292629]/50 transition-colors"
+                onClick={() => {
+                    if (isStreaming) return;
+                    setUserToggled(true);
+                    setIsOpen((v) => !v);
+                }}
+                className="flex items-center text-sm text-gray-400 hover:text-gray-500 transition-colors"
             >
                 {isStreaming ? (
-                    <div className="w-1.5 h-1.5 rounded-full border border-[#C7C7B2] border-t-transparent animate-spin shrink-0" />
+                    <div className="w-1.5 h-1.5 rounded-full border border-gray-400 border-t-transparent animate-spin shrink-0" />
                 ) : (
-                    <div className="w-1.5 h-1.5 rounded-full bg-[#C7C7B2] shrink-0" />
+                    <div className="w-1.5 h-1.5 rounded-full bg-gray-300 shrink-0" />
                 )}
                 <span className="font-medium ml-2">
                     {isStreaming
@@ -115,11 +189,56 @@ function ReasoningBlock({
                     />
                 )}
             </button>
-            {(isOpen || isStreaming) && (
-                <div className="mt-1.5 ml-[14px] text-sm text-[#292629]/40 prose prose-sm max-w-none [&>*]:text-[#292629]/40 [&>*]:text-sm">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                        {text}
-                    </ReactMarkdown>
+            {showContent && (
+                <div className="mt-1.5 ml-[14px]">
+                    <div
+                        className={`relative ${isCollapsed ? "overflow-hidden" : ""}`}
+                        style={
+                            isCollapsed
+                                ? {
+                                      maxHeight: `${REASONING_COLLAPSED_MAX_HEIGHT_REM}rem`,
+                                  }
+                                : undefined
+                        }
+                    >
+                        <div
+                            ref={contentRef}
+                            className="text-sm text-gray-400 prose prose-sm max-w-none [&>*]:text-gray-400 [&>*]:text-sm"
+                        >
+                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                {text}
+                            </ReactMarkdown>
+                        </div>
+                        {isCollapsed && (
+                            <>
+                                <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-b from-white/0 to-white" />
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setUserToggled(true);
+                                        setIsOpen(true);
+                                    }}
+                                    className="absolute left-1/2 bottom-2 z-10 -translate-x-1/2 text-gray-400 transition-colors hover:text-gray-600"
+                                    aria-label="Expand thought process"
+                                >
+                                    <ChevronDown className="h-3.5 w-3.5" />
+                                </button>
+                            </>
+                        )}
+                    </div>
+                    {isOverflowing && isOpen && (
+                        <button
+                            type="button"
+                            onClick={() => {
+                                setUserToggled(true);
+                                setIsOpen(false);
+                            }}
+                            className="mx-auto mt-2 flex text-gray-400 transition-colors hover:text-gray-600"
+                            aria-label="Minimise thought process"
+                        >
+                            <ChevronDown className="h-3.5 w-3.5 rotate-180" />
+                        </button>
+                    )}
                 </div>
             )}
         </div>
@@ -138,16 +257,16 @@ function DocReadBlock({
     isStreaming?: boolean;
 }) {
     return (
-        <div className="flex items-center text-sm text-[#292629]/40 ml-1">
+        <div className="flex items-center text-sm text-gray-400 ml-1">
             {isStreaming ? (
-                <div className="w-1.5 h-1.5 rounded-full border border-[#C7C7B2] border-t-transparent animate-spin shrink-0" />
+                <div className="w-1.5 h-1.5 rounded-full border border-gray-400 border-t-transparent animate-spin shrink-0" />
             ) : (
                 <div className="w-1.5 h-1.5 rounded-full bg-green-400 shrink-0" />
             )}
             <span className="font-medium ml-2">
                 {isStreaming ? "Reading" : "Read"}
             </span>
-            <span className="ml-1 text-[#292629]/50">{label}</span>
+            <span className="ml-1 text-gray-500">{label}</span>
         </div>
     );
 }
@@ -296,9 +415,9 @@ function TRAssistantMessage({
             return (
                 <div
                     key={key}
-                    className="flex items-center text-sm text-[#292629]/40 ml-1"
+                    className="flex items-center text-sm text-gray-400 ml-1"
                 >
-                    <div className="w-1.5 h-1.5 rounded-full border border-[#C7C7B2] border-t-transparent animate-spin shrink-0" />
+                    <div className="w-1.5 h-1.5 rounded-full border border-gray-400 border-t-transparent animate-spin shrink-0" />
                     <span className="ml-2">Thinking...</span>
                 </div>
             );
@@ -351,15 +470,15 @@ function TRAssistantMessage({
                                             )
                                         }
                                         title={`${cit.col_name} · ${cit.doc_name.replace(/\.[^.]+$/, "")}`}
-                                        className="mx-0.5 inline-flex items-center justify-center rounded-full w-4 h-4 text-[10px] font-medium bg-[#F5F5F5] text-[#292629] hover:bg-[#C7C7B2]/40 transition-colors align-super font-sans"
+                                        className="mx-0.5 inline-flex items-center justify-center rounded-full w-4 h-4 text-[10px] font-medium bg-gray-100 text-gray-900 hover:bg-gray-200 transition-colors align-super font-serif"
                                     >
-                                        {idx + 1}
+                                        {cit.ref}
                                     </button>
                                 );
                             }
                         }
                         return (
-                            <code className="bg-[#F5F5F5] px-1 py-0.5 rounded text-xs font-mono">
+                            <code className="bg-gray-100 px-1 py-0.5 rounded text-xs font-mono">
                                 {children}
                             </code>
                         );
@@ -372,7 +491,7 @@ function TRAssistantMessage({
     );
 
     return (
-        <div className="text-[#292629] font-sans">
+        <div className="text-gray-900 font-serif">
             <TRResponseStatus isActive={!!msg.isStreaming} />
             {groups.length > 0 && (
                 <div className="flex flex-col gap-2.5">
@@ -427,7 +546,7 @@ function MessageBubble({
     if (msg.role === "user") {
         return (
             <div className="flex justify-end">
-                <div className="max-w-[90%] rounded-md bg-[#F5F5F5] px-3 py-2 text-xs text-[#292629]/90 whitespace-pre-wrap">
+                <div className="max-w-[90%] rounded-md bg-gray-100 px-3 py-2 text-xs text-gray-800 whitespace-pre-wrap">
                     {msg.content}
                 </div>
             </div>
@@ -447,16 +566,49 @@ function TRChatInput({
     model,
     onModelChange,
     apiKeys,
+    onHeightChange,
 }: {
     isLoading: boolean;
     onSubmit: (value: string) => void;
     onCancel: () => void;
     model: string;
     onModelChange: (id: string) => void;
-    apiKeys: { claudeApiKey: string | null; geminiApiKey: string | null };
+    apiKeys?: ApiKeyState;
+    onHeightChange: (height: number) => void;
 }) {
     const [value, setValue] = useState("");
+    const rootRef = useRef<HTMLDivElement>(null);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+    useEffect(() => {
+        const root = rootRef.current;
+        if (!root) return;
+
+        const notify = () => {
+            onHeightChange(root.getBoundingClientRect().height);
+        };
+        notify();
+
+        const observer = new ResizeObserver(notify);
+        observer.observe(root);
+        window.addEventListener("resize", notify);
+        return () => {
+            observer.disconnect();
+            window.removeEventListener("resize", notify);
+        };
+    }, [onHeightChange]);
+
+    function resizeTextarea(el: HTMLTextAreaElement) {
+        el.style.height = "auto";
+        el.style.height = `${Math.min(el.scrollHeight, 192)}px`;
+        el.style.overflowY = el.scrollHeight > 192 ? "auto" : "hidden";
+    }
+
+    function resetTextarea() {
+        if (!textareaRef.current) return;
+        textareaRef.current.style.height = "auto";
+        textareaRef.current.style.overflowY = "hidden";
+    }
 
     function handleAction() {
         if (isLoading) {
@@ -466,13 +618,24 @@ function TRChatInput({
         const trimmed = value.trim();
         if (!trimmed) return;
         setValue("");
-        if (textareaRef.current) textareaRef.current.style.height = "auto";
+        resetTextarea();
         onSubmit(trimmed);
     }
 
     return (
-        <div className="absolute bottom-0 left-0 right-0 mx-4 pb-4 bg-white">
-            <div className="border border-[#C7C7B2] rounded-xl bg-white  pt-1.5 pb-1.5 flex flex-col gap-1">
+        <div
+            ref={rootRef}
+            className={cn(
+                "absolute bottom-0 left-0 right-0 px-4 pb-3",
+                "bg-transparent",
+            )}
+        >
+            <div
+                className={cn(
+                    "pt-2 pb-1.5 flex flex-col gap-1",
+                    "rounded-[18px] border border-white/65 bg-white/60 shadow-[0_6px_18px_rgba(15,23,42,0.16),inset_0_1px_0_rgba(255,255,255,0.85),inset_0_-6px_14px_rgba(255,255,255,0.18)] backdrop-blur-2xl",
+                )}
+            >
                 <textarea
                     ref={textareaRef}
                     rows={1}
@@ -480,8 +643,7 @@ function TRChatInput({
                     value={value}
                     onChange={(e) => {
                         setValue(e.target.value);
-                        e.target.style.height = "auto";
-                        e.target.style.height = `${e.target.scrollHeight}px`;
+                        resizeTextarea(e.target);
                     }}
                     onKeyDown={(e) => {
                         if (e.key === "Enter" && !e.shiftKey) {
@@ -489,7 +651,7 @@ function TRChatInput({
                             handleAction();
                         }
                     }}
-                    className="flex-1 resize-none text-sm bg-transparent outline-none placeholder:text-[#292629]/40 leading-6 max-h-48 overflow-y-auto border-0 p-0 pl-3 pr-2 pt-1"
+                    className="w-full resize-none text-sm bg-transparent outline-none placeholder:text-gray-400 leading-6 max-h-48 overflow-hidden border-0 p-0 pl-3 pr-2 pt-0.5"
                 />
                 <div className="flex items-center justify-between pl-1 pr-2">
                     <ModelToggle
@@ -501,7 +663,10 @@ function TRChatInput({
                         type="button"
                         onClick={handleAction}
                         disabled={!isLoading && !value.trim()}
-                        className="relative bg-gradient-to-b from-neutral-700 to-black text-white rounded-[10px] h-7 w-7 shrink-0 flex items-center justify-center disabled:cursor-default disabled:from-neutral-600 disabled:to-black border border-white/30 active:enabled:scale-95 transition-all duration-150"
+                        className={cn(
+                            "relative bg-gradient-to-b from-neutral-700 to-black text-white rounded-[10px] h-7 w-7 shrink-0 flex items-center justify-center disabled:cursor-default disabled:from-neutral-600 disabled:to-black border border-white/30 active:enabled:scale-95 transition-all duration-150",
+                            "shadow-[0_5px_14px_rgba(15,23,42,0.18),inset_0_1px_0_rgba(255,255,255,0.24)]",
+                        )}
                     >
                         {isLoading ? (
                             <Square
@@ -542,20 +707,20 @@ function HistoryDropdown({
 
     return (
         <>
-            <div className="flex items-center gap-1.5 px-2 py-1.5 border-b border-[#C7C7B2]/50">
-                <Search className="h-3 w-3 text-[#292629]/40 shrink-0" />
+            <div className="flex items-center gap-1.5 px-2 py-1.5 border-b border-gray-100">
+                <Search className="h-3 w-3 text-gray-400 shrink-0" />
                 <input
                     autoFocus
                     type="text"
                     placeholder="Search chats…"
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
-                    className="flex-1 text-xs bg-transparent outline-none placeholder:text-[#292629]/40 text-[#292629]/80"
+                    className="flex-1 text-xs bg-transparent outline-none placeholder:text-gray-400 text-gray-700"
                 />
             </div>
             <div className="max-h-48 overflow-y-auto">
                 {filtered.length === 0 ? (
-                    <p className="px-3 py-2 text-xs text-[#292629]/40">
+                    <p className="px-3 py-2 text-xs text-gray-400">
                         {chats.filter((c) => c.id !== currentChatId).length ===
                         0
                             ? "No previous chats."
@@ -568,7 +733,7 @@ function HistoryDropdown({
                             <button
                                 key={chat.id}
                                 onClick={() => onLoad(chat.id)}
-                                className="w-full px-3 py-2 text-left text-xs text-[#292629]/80 hover:bg-[#F5F5F5] transition-colors truncate"
+                                className="w-full px-3 py-2 text-left text-xs text-gray-700 hover:bg-gray-50 transition-colors truncate"
                             >
                                 {label}
                             </button>
@@ -607,10 +772,7 @@ export function TRChatPanel({
     onChatIdChange,
 }: Props) {
     const { profile, updateModelPreference } = useUserProfile();
-    const apiKeys = {
-        claudeApiKey: profile?.claudeApiKey ?? null,
-        geminiApiKey: profile?.geminiApiKey ?? null,
-    };
+    const apiKeys = profile?.apiKeys;
     const currentModel = profile?.tabularModel ?? "gemini-3-flash-preview";
     const [apiKeyModalProvider, setApiKeyModalProvider] =
         useState<ModelProvider | null>(null);
@@ -629,6 +791,7 @@ export function TRChatPanel({
     const [messagesVisible, setMessagesVisible] = useState(false);
     const [panelWidth, setPanelWidth] = useState(380);
     const [isResizing, setIsResizing] = useState(false);
+    const [inputHeight, setInputHeight] = useState(96);
 
     useEffect(() => {
         if (!isResizing) return;
@@ -896,7 +1059,7 @@ export function TRChatPanel({
             .map((_, i) => i)
             .reverse()
             .find((i) => predicate(events[i]));
-        if (idx === undefined) return;
+        if (idx === undefined) return false;
         const newEvents = [...events];
         newEvents[idx] = updater(events[idx]);
         eventsRef.current = newEvents;
@@ -909,6 +1072,7 @@ export function TRChatPanel({
             }
             return updated;
         });
+        return true;
     }
 
     // ---- chat actions ----
@@ -957,7 +1121,7 @@ export function TRChatPanel({
 
     async function handleSubmit(trimmed: string) {
         if (!trimmed || isLoading) return;
-        if (!isModelAvailable(currentModel, apiKeys)) {
+        if (apiKeys && !isModelAvailable(currentModel, apiKeys)) {
             setApiKeyModalProvider(getModelProvider(currentModel));
             return;
         }
@@ -1191,6 +1355,295 @@ export function TRChatPanel({
                             continue;
                         }
 
+                        if (
+                            data.type === "courtlistener_search_case_law_start"
+                        ) {
+                            pushEvent({
+                                type: "courtlistener_search_case_law",
+                                query: (data.query as string) ?? "",
+                                isStreaming: true,
+                            });
+                            continue;
+                        }
+
+                        if (data.type === "courtlistener_search_case_law") {
+                            updateMatchingEvent(
+                                (e) =>
+                                    e.type ===
+                                        "courtlistener_search_case_law" &&
+                                    e.query === (data.query as string) &&
+                                    !!e.isStreaming,
+                                () => ({
+                                    type: "courtlistener_search_case_law",
+                                    query: (data.query as string) ?? "",
+                                    result_count:
+                                        typeof data.result_count === "number"
+                                            ? (data.result_count as number)
+                                            : 0,
+                                    error:
+                                        typeof data.error === "string"
+                                            ? (data.error as string)
+                                            : undefined,
+                                    isStreaming: false,
+                                }),
+                            );
+                            pushThinkingPlaceholder();
+                            continue;
+                        }
+
+                        if (data.type === "courtlistener_get_cases_start") {
+                            pushEvent({
+                                type: "courtlistener_get_cases",
+                                cluster_ids: Array.isArray(data.cluster_ids)
+                                    ? (data.cluster_ids as unknown[]).filter(
+                                          (value: unknown): value is number =>
+                                              typeof value === "number",
+                                      )
+                                    : [],
+                                isStreaming: true,
+                            });
+                            continue;
+                        }
+
+                        if (data.type === "courtlistener_get_cases") {
+                            updateMatchingEvent(
+                                (e) =>
+                                    e.type === "courtlistener_get_cases" &&
+                                    !!e.isStreaming,
+                                () => ({
+                                    type: "courtlistener_get_cases",
+                                    cluster_ids: Array.isArray(data.cluster_ids)
+                                        ? (
+                                              data.cluster_ids as unknown[]
+                                          ).filter(
+                                              (
+                                                  value: unknown,
+                                              ): value is number =>
+                                                  typeof value === "number",
+                                          )
+                                        : [],
+                                    case_count:
+                                        typeof data.case_count === "number"
+                                            ? (data.case_count as number)
+                                            : 0,
+                                    opinion_count:
+                                        typeof data.opinion_count === "number"
+                                            ? (data.opinion_count as number)
+                                            : 0,
+                                    cases: parseCourtlistenerEventCases(
+                                        data.cases,
+                                    ),
+                                    error:
+                                        typeof data.error === "string"
+                                            ? (data.error as string)
+                                            : undefined,
+                                    isStreaming: false,
+                                }),
+                            );
+                            pushThinkingPlaceholder();
+                            continue;
+                        }
+
+                        if (
+                            data.type === "courtlistener_find_in_case_start"
+                        ) {
+                            const searches = parseCourtlistenerCaseSearches(
+                                data.searches,
+                            );
+                            pushEvent({
+                                type: "courtlistener_find_in_case",
+                                cluster_id: searches?.length
+                                    ? null
+                                    : typeof data.cluster_id === "number"
+                                      ? (data.cluster_id as number)
+                                      : null,
+                                query: searches?.length
+                                    ? ""
+                                    : ((data.query as string) ?? ""),
+                                searches,
+                                isStreaming: true,
+                            });
+                            continue;
+                        }
+
+                        if (data.type === "courtlistener_find_in_case") {
+                            const searches = parseCourtlistenerCaseSearches(
+                                data.searches,
+                            );
+                            updateMatchingEvent(
+                                (e) =>
+                                    e.type ===
+                                        "courtlistener_find_in_case" &&
+                                    (searches?.length
+                                        ? Array.isArray(e.searches)
+                                        : e.cluster_id ===
+                                              (typeof data.cluster_id ===
+                                              "number"
+                                                  ? (data.cluster_id as number)
+                                                  : null) &&
+                                          e.query ===
+                                              (data.query as string)) &&
+                                    !!e.isStreaming,
+                                () => ({
+                                    type: "courtlistener_find_in_case",
+                                    cluster_id: searches?.length
+                                        ? null
+                                        : typeof data.cluster_id === "number"
+                                          ? (data.cluster_id as number)
+                                          : null,
+                                    query: searches?.length
+                                        ? ""
+                                        : ((data.query as string) ?? ""),
+                                    total_matches:
+                                        typeof data.total_matches === "number"
+                                            ? (data.total_matches as number)
+                                            : 0,
+                                    searches,
+                                    case_name:
+                                        typeof data.case_name === "string"
+                                            ? (data.case_name as string)
+                                            : null,
+                                    citation:
+                                        typeof data.citation === "string"
+                                            ? (data.citation as string)
+                                            : null,
+                                    error:
+                                        typeof data.error === "string"
+                                            ? (data.error as string)
+                                            : undefined,
+                                    isStreaming: false,
+                                }),
+                            );
+                            pushThinkingPlaceholder();
+                            continue;
+                        }
+
+                        if (data.type === "courtlistener_read_case_start") {
+                            pushEvent({
+                                type: "courtlistener_read_case",
+                                cluster_id:
+                                    typeof data.cluster_id === "number"
+                                        ? (data.cluster_id as number)
+                                        : null,
+                                isStreaming: true,
+                            });
+                            continue;
+                        }
+
+                        if (data.type === "courtlistener_read_case") {
+                            updateMatchingEvent(
+                                (e) =>
+                                    e.type === "courtlistener_read_case" &&
+                                    e.cluster_id ===
+                                        (typeof data.cluster_id === "number"
+                                            ? (data.cluster_id as number)
+                                            : null) &&
+                                    !!e.isStreaming,
+                                () => ({
+                                    type: "courtlistener_read_case",
+                                    cluster_id:
+                                        typeof data.cluster_id === "number"
+                                            ? (data.cluster_id as number)
+                                            : null,
+                                    case_name:
+                                        typeof data.case_name === "string"
+                                            ? (data.case_name as string)
+                                            : null,
+                                    citation:
+                                        typeof data.citation === "string"
+                                            ? (data.citation as string)
+                                            : null,
+                                    opinion_count:
+                                        typeof data.opinion_count === "number"
+                                            ? (data.opinion_count as number)
+                                            : 0,
+                                    error:
+                                        typeof data.error === "string"
+                                            ? (data.error as string)
+                                            : undefined,
+                                    isStreaming: false,
+                                }),
+                            );
+                            pushThinkingPlaceholder();
+                            continue;
+                        }
+
+                        if (
+                            data.type === "courtlistener_verify_citations_start"
+                        ) {
+                            pushEvent({
+                                type: "courtlistener_verify_citations",
+                                citation_count:
+                                    typeof data.citation_count === "number"
+                                        ? (data.citation_count as number)
+                                        : 0,
+                                isStreaming: true,
+                            });
+                            continue;
+                        }
+
+                        if (data.type === "courtlistener_verify_citations") {
+                            updateMatchingEvent(
+                                (e) =>
+                                    e.type ===
+                                        "courtlistener_verify_citations" &&
+                                    !!e.isStreaming,
+                                () => ({
+                                    type: "courtlistener_verify_citations",
+                                    citation_count:
+                                        typeof data.citation_count === "number"
+                                            ? (data.citation_count as number)
+                                            : 0,
+                                    match_count:
+                                        typeof data.match_count === "number"
+                                            ? (data.match_count as number)
+                                            : 0,
+                                    error:
+                                        typeof data.error === "string"
+                                            ? (data.error as string)
+                                            : undefined,
+                                    isStreaming: false,
+                                }),
+                            );
+                            pushThinkingPlaceholder();
+                            continue;
+                        }
+
+                        if (data.type === "case_citation") {
+                            pushEvent({
+                                type: "case_citation",
+                                cluster_id:
+                                    typeof data.cluster_id === "number"
+                                        ? (data.cluster_id as number)
+                                        : null,
+                                case_name:
+                                    typeof data.case_name === "string"
+                                        ? (data.case_name as string)
+                                        : null,
+                                citation:
+                                    typeof data.citation === "string"
+                                        ? (data.citation as string)
+                                        : null,
+                                url: data.url as string,
+                            });
+                            continue;
+                        }
+
+                        if (data.type === "case_opinions") {
+                            pushEvent({
+                                type: "case_opinions",
+                                cluster_id:
+                                    typeof data.cluster_id === "number"
+                                        ? (data.cluster_id as number)
+                                        : 0,
+                                case: data.case as Extract<
+                                    AssistantEvent,
+                                    { type: "case_opinions" }
+                                >["case"],
+                            });
+                            continue;
+                        }
+
                         if (data.type === "doc_read_start") {
                             pushEvent({
                                 type: "doc_read",
@@ -1303,7 +1756,10 @@ export function TRChatPanel({
     return (
         <div
             style={{ width: panelWidth }}
-            className="shrink-0 flex flex-col border-r border-[#C7C7B2] bg-white h-full relative"
+            className={cn(
+                "shrink-0 flex flex-col border-r border-gray-200 h-full relative",
+                "bg-transparent",
+            )}
         >
             {/* Resize handle */}
             <div
@@ -1313,14 +1769,20 @@ export function TRChatPanel({
                 }}
                 className={`absolute top-0 right-0 h-full w-1 cursor-col-resize z-20 transition-colors ${
                     isResizing
-                        ? "bg-[#898344]"
-                        : "bg-transparent hover:bg-[#898344]"
+                        ? "bg-blue-500"
+                        : "bg-transparent hover:bg-blue-500"
                 }`}
             />
             {/* Header */}
-            <div className="flex items-center justify-between h-8 px-2 border-b border-[#C7C7B2] shrink-0">
-                <div className="flex items-center gap-1.5 px-2 min-w-0">
-                    <MikeIcon mike size={14} />
+            <div className="flex items-center justify-between h-8 pr-2 border-b border-gray-200 shrink-0">
+                <div className="flex items-center gap-1 pl-2 pr-2 min-w-0">
+                    <button
+                        onClick={onClose}
+                        title="Close"
+                        className="flex items-center justify-center h-7 w-7 shrink-0 rounded-md text-gray-600 hover:text-gray-900 transition-colors"
+                    >
+                        <ChevronLeft className="h-3.5 w-3.5" />
+                    </button>
                     <div
                         onMouseEnter={(e) => {
                             const el = e.currentTarget;
@@ -1339,8 +1801,8 @@ export function TRChatPanel({
                         }}
                         className="min-w-0 overflow-x-hidden whitespace-nowrap scrollbar-none"
                     >
-                        <span className="text-xs font-medium text-[#292629]/80">
-                            {currentChatTitle ?? "Assistant"}
+                        <span className="text-xs font-medium text-gray-700">
+                            {currentChatTitle ?? "New chat"}
                         </span>
                     </div>
                 </div>
@@ -1349,12 +1811,12 @@ export function TRChatPanel({
                         <button
                             onClick={() => setHistoryOpen((v) => !v)}
                             title="Chat history"
-                            className={`flex items-center justify-center h-7 w-7 rounded-md transition-colors ${historyOpen ? "text-[#292629]" : "text-[#292629]/40 hover:text-[#292629]/80"}`}
+                            className={`flex items-center justify-center h-7 w-7 rounded-md transition-colors ${historyOpen ? "text-gray-900" : "text-gray-600 hover:text-gray-900"}`}
                         >
                             <Clock className="h-3.5 w-3.5" />
                         </button>
                         {historyOpen && (
-                            <div className="absolute top-full right-0 mt-1 w-64 rounded-lg border border-[#C7C7B2]/50 bg-white shadow-lg z-50 overflow-hidden">
+                            <div className="absolute top-full right-0 mt-1 w-64 rounded-lg border border-gray-100 bg-white shadow-lg z-50 overflow-hidden">
                                 <HistoryDropdown
                                     chats={chats}
                                     currentChatId={currentChatId}
@@ -1366,7 +1828,7 @@ export function TRChatPanel({
                     <button
                         onClick={handleNewChat}
                         title="New chat"
-                        className="flex items-center justify-center h-7 w-7 rounded-md text-[#292629]/40 hover:text-[#292629]/80 transition-colors"
+                        className="flex items-center justify-center h-7 w-7 rounded-md text-gray-600 hover:text-gray-900 transition-colors"
                     >
                         <MessageSquarePlus className="h-3.5 w-3.5" />
                     </button>
@@ -1374,30 +1836,24 @@ export function TRChatPanel({
                         <button
                             onClick={handleDeleteChat}
                             title="Delete chat"
-                            className="flex items-center justify-center h-7 w-7 rounded-md text-[#292629]/40 hover:text-red-600 transition-colors"
+                            className="flex items-center justify-center h-7 w-7 rounded-md text-gray-600 hover:text-red-600 transition-colors"
                         >
                             <Trash2 className="h-3.5 w-3.5" />
                         </button>
                     )}
-                    <button
-                        onClick={onClose}
-                        title="Close"
-                        className="flex items-center justify-center h-7 w-7 rounded-md text-[#292629]/40 hover:text-[#292629]/80 transition-colors"
-                    >
-                        <X className="h-3.5 w-3.5" />
-                    </button>
                 </div>
             </div>
 
             {/* Messages */}
             <div
                 ref={messagesContainerRef}
-                className="flex-1 overflow-y-auto px-4 pt-4 pb-[96px] flex flex-col"
+                className="flex-1 overflow-y-auto px-4 pt-4 flex flex-col"
+                style={{ paddingBottom: Math.ceil(inputHeight + 16) }}
             >
                 {messages.length === 0 && !isLoadingMessages && (
                     <div className="flex flex-1 flex-col items-center justify-center gap-2">
                         <MikeIcon size={24} />
-                        <p className="text-sm text-[#292629]/40 text-center">
+                        <p className="text-gray-400 font-serif text-center">
                             Ask a question about this tabular review.
                         </p>
                     </div>
@@ -1405,15 +1861,15 @@ export function TRChatPanel({
                 {isLoadingMessages && (
                     <div className="flex flex-col gap-4">
                         <div className="flex justify-end">
-                            <div className="bg-[#F5F5F5] rounded-2xl p-3 w-3/5">
-                                <div className="h-3 bg-gradient-to-r from-[#EBEBEB] via-[#D8D8D8] to-[#EBEBEB] bg-[length:200%_100%] animate-[shimmer_2s_ease-in-out_infinite] rounded w-full" />
+                            <div className="bg-gray-100 rounded-2xl p-3 w-3/5">
+                                <div className="h-3 bg-gradient-to-r from-gray-200 via-gray-300 to-gray-200 bg-[length:200%_100%] animate-[shimmer_2s_ease-in-out_infinite] rounded w-full" />
                             </div>
                         </div>
                         <div className="space-y-2">
                             {[1, 2, 3, 4].map((i) => (
                                 <div
                                     key={i}
-                                    className={`h-3 bg-gradient-to-r from-[#EBEBEB] via-[#D8D8D8] to-[#EBEBEB] bg-[length:200%_100%] animate-[shimmer_2s_ease-in-out_infinite] rounded ${i === 3 ? "w-5/6" : i === 4 ? "w-4/6" : "w-full"}`}
+                                    className={`h-3 bg-gradient-to-r from-gray-200 via-gray-300 to-gray-200 bg-[length:200%_100%] animate-[shimmer_2s_ease-in-out_infinite] rounded ${i === 3 ? "w-5/6" : i === 4 ? "w-4/6" : "w-full"}`}
                                 />
                             ))}
                         </div>
@@ -1458,6 +1914,7 @@ export function TRChatPanel({
                     updateModelPreference("tabularModel", id)
                 }
                 apiKeys={apiKeys}
+                onHeightChange={setInputHeight}
             />
 
             <ApiKeyMissingModal

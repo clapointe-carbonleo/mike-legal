@@ -12,7 +12,7 @@ import {
     ChevronDown,
     ChevronRight,
     Download,
-    Folder,
+    Folder as FolderIcon,
     FolderOpen,
     FolderPlus,
     MessageSquare,
@@ -43,13 +43,13 @@ import {
     uploadDocumentVersion,
     renameDocumentVersion,
     getProjectPeople,
-    type MikeDocumentVersion,
+    type DocumentVersion,
 } from "@/app/lib/mikeApi";
 import type {
-    MikeDocument,
-    MikeFolder,
-    MikeProject,
-    MikeChat,
+    Document,
+    Folder,
+    Project,
+    Chat,
     TabularReview,
 } from "@/app/components/shared/types";
 import { ToolbarTabs } from "@/app/components/shared/ToolbarTabs";
@@ -119,7 +119,7 @@ function DocVersionHistory({
     docId: string;
     filename: string;
     loading: boolean;
-    versions: MikeDocumentVersion[];
+    versions: DocumentVersion[];
     onDownloadVersion: (
         docId: string,
         versionId: string,
@@ -272,9 +272,9 @@ function DocVersionHistory({
 }
 
 export function ProjectPage({ projectId }: Props) {
-    const [project, setProject] = useState<MikeProject | null>(null);
-    const [folders, setFolders] = useState<MikeFolder[]>([]);
-    const [chats, setChats] = useState<MikeChat[]>([]);
+    const [project, setProject] = useState<Project | null>(null);
+    const [folders, setFolders] = useState<Folder[]>([]);
+    const [chats, setChats] = useState<Chat[]>([]);
     const [projectReviews, setProjectReviews] = useState<TabularReview[]>([]);
     const [loading, setLoading] = useState(true);
     const searchParams = useSearchParams();
@@ -288,8 +288,8 @@ export function ProjectPage({ projectId }: Props) {
     const [ownerOnlyAction, setOwnerOnlyAction] = useState<string | null>(null);
     const { user } = useAuth();
     const [uploadVersionDoc, setUploadVersionDoc] =
-        useState<MikeDocument | null>(null);
-    const [viewingDoc, setViewingDoc] = useState<MikeDocument | null>(null);
+        useState<Document | null>(null);
+    const [viewingDoc, setViewingDoc] = useState<Document | null>(null);
     const [viewingDocVersion, setViewingDocVersion] = useState<{
         id: string;
         label: string;
@@ -311,7 +311,7 @@ export function ProjectPage({ projectId }: Props) {
         Set<string>
     >(() => new Set());
     const [versionsByDocId, setVersionsByDocId] = useState<
-        Map<string, MikeDocumentVersion[]>
+        Map<string, DocumentVersion[]>
     >(() => new Map());
     const [loadingVersionDocIds, setLoadingVersionDocIds] = useState<
         Set<string>
@@ -374,12 +374,12 @@ export function ProjectPage({ projectId }: Props) {
      * latest_version_number) and re-fetch the version list so the history
      * panel shows the new row.
      */
-    function handleUploadNewVersion(doc: MikeDocument) {
+    function handleUploadNewVersion(doc: Document) {
         setUploadVersionDoc(doc);
     }
 
     async function submitNewVersion(
-        doc: MikeDocument,
+        doc: Document,
         file: File,
         displayName: string,
     ) {
@@ -442,7 +442,7 @@ export function ProjectPage({ projectId }: Props) {
     const [renamingReviewId, setRenamingReviewId] = useState<string | null>(null);
     const [renameReviewValue, setRenameReviewValue] = useState("");
 
-    // Folder state
+    // FolderIcon state
     const [expandedFolderIds, setExpandedFolderIds] = useState<Set<string>>(new Set());
     // undefined = not creating; null = creating at root; string = creating inside that folder id
     const [creatingFolderIn, setCreatingFolderIn] = useState<string | null | undefined>(undefined);
@@ -472,7 +472,7 @@ export function ProjectPage({ projectId }: Props) {
     useEffect(() => {
         Promise.all([
             getProject(projectId),
-            listProjectChats(projectId).catch(() => [] as MikeChat[]),
+            listProjectChats(projectId).catch(() => [] as Chat[]),
             listTabularReviews(projectId).catch(() => []),
         ])
             .then(([proj, projectChats, projectReviews]) => {
@@ -532,7 +532,7 @@ export function ProjectPage({ projectId }: Props) {
         }
     }, [creatingFolderIn]);
 
-    // ── Folder handlers ───────────────────────────────────────────────────────
+    // ── FolderIcon handlers ───────────────────────────────────────────────────────
 
     function toggleFolder(id: string) {
         setExpandedFolderIds((prev) => {
@@ -550,7 +550,7 @@ export function ProjectPage({ projectId }: Props) {
         // Immediately hide the input and show an optimistic folder row
         setCreatingFolderIn(undefined);
         const tempId = `temp-${Date.now()}`;
-        const optimistic: MikeFolder = {
+        const optimistic: Folder = {
             id: tempId,
             project_id: projectId,
             user_id: "",
@@ -605,7 +605,7 @@ export function ProjectPage({ projectId }: Props) {
 
     // ── Doc/chat/review handlers ──────────────────────────────────────────────
 
-    function handleDocsSelected(newDocs: MikeDocument[]) {
+    function handleDocsSelected(newDocs: Document[]) {
         setProject((prev) =>
             prev ? {
                 ...prev,
@@ -810,7 +810,7 @@ export function ProjectPage({ projectId }: Props) {
 
     function wouldCreateCycle(movingId: string, targetId: string): boolean {
         // Returns true if targetId is movingId or a descendant of it
-        let cur: MikeFolder | undefined = folders.find((f) => f.id === targetId);
+        let cur: Folder | undefined = folders.find((f) => f.id === targetId);
         while (cur) {
             if (cur.id === movingId) return true;
             if (!cur.parent_folder_id) break;
@@ -861,7 +861,7 @@ export function ProjectPage({ projectId }: Props) {
                         <input
                             autoFocus
                             className="flex-1 min-w-0 text-sm text-[#292629]/90 bg-transparent outline-none border-b border-[#C7C7B2]"
-                            placeholder="Folder name"
+                            placeholder="FolderIcon name"
                             value={newFolderName}
                             onChange={(e) => setNewFolderName(e.target.value)}
                             onKeyDown={(e) => {
@@ -1055,7 +1055,7 @@ export function ProjectPage({ projectId }: Props) {
                                 <div className="flex items-center gap-1.5">
                                     {isExpanded
                                         ? <FolderOpen className="h-4 w-4 text-amber-500 shrink-0" />
-                                        : <Folder className="h-4 w-4 text-amber-500 shrink-0" />
+                                        : <FolderIcon className="h-4 w-4 text-amber-500 shrink-0" />
                                     }
                                     {isRenaming ? (
                                         <input

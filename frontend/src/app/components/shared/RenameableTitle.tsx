@@ -8,27 +8,43 @@ interface Props {
     suffix?: React.ReactNode;
 }
 
+type CaretDocument = Document & {
+    caretPositionFromPoint?: (
+        x: number,
+        y: number,
+    ) => { offset: number } | null;
+    caretRangeFromPoint?: (x: number, y: number) => Range | null;
+};
+
 export function RenameableTitle({ value, onCommit, suffix }: Props) {
     const [editing, setEditing] = useState(false);
     const [draft, setDraft] = useState("");
     const caretPos = useRef<number | null>(null);
     const escaped = useRef(false);
+    const committed = useRef(false);
 
     function startEditing(e: React.MouseEvent) {
-        const doc = document as any;
+        const doc = document as CaretDocument;
         const caret = doc.caretPositionFromPoint?.(e.clientX, e.clientY);
         const range = !caret && doc.caretRangeFromPoint?.(e.clientX, e.clientY);
-        caretPos.current = caret ? caret.offset : range ? range.startOffset : null;
+        caretPos.current = caret
+            ? caret.offset
+            : range
+              ? range.startOffset
+              : null;
         escaped.current = false;
+        committed.current = false;
         setDraft(value);
         setEditing(true);
     }
 
     function commit() {
+        if (committed.current) return;
         if (escaped.current) {
             escaped.current = false;
             return;
         }
+        committed.current = true;
         setEditing(false);
         onCommit(draft.trim());
     }
@@ -46,14 +62,18 @@ export function RenameableTitle({ value, onCommit, suffix }: Props) {
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
                 onKeyDown={(e) => {
-                    if (e.key === "Enter") commit();
+                    if (e.key === "Enter") {
+                        e.preventDefault();
+                        commit();
+                    }
                     if (e.key === "Escape") {
                         escaped.current = true;
+                        committed.current = true;
                         setEditing(false);
                     }
                 }}
                 onBlur={commit}
-                className="text-[#292629] bg-transparent outline-none min-w-0"
+                className="text-gray-900 bg-transparent outline-none min-w-0"
                 style={{ width: `${draft.length + 1}ch` }}
             />
         );
@@ -61,7 +81,7 @@ export function RenameableTitle({ value, onCommit, suffix }: Props) {
 
     return (
         <span
-            className="text-[#292629] cursor-text hover:text-[#292629]/60 transition-colors"
+            className="inline-block cursor-text text-gray-900 transition-colors hover:text-gray-600"
             onClick={startEditing}
         >
             {value}

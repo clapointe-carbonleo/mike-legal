@@ -1,96 +1,115 @@
 "use client";
 
-import React, { createContext, useContext, useEffect, useState, ReactNode } from "react";
+import React, {
+    createContext,
+    useContext,
+    useEffect,
+    useState,
+    ReactNode,
+} from "react";
+import type { User as SupabaseUser } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
-
-async function syncProfileName(userId: string, email: string, fullName: string) {
-    if (!fullName) return;
-    supabase.from("profiles").upsert(
-        { id: userId, email, full_name: fullName },
-        { onConflict: "id", ignoreDuplicates: false }
-    ).then(({ error }) => { if (error) console.error("[syncProfile]", error.message); });
-}
 
 interface User {
     id: string;
     email: string;
-    name: string;
+    pendingEmail?: string | null;
 }
 
 interface AuthContextType {
-    user: User;
+    user: User | null;
     isAuthenticated: boolean;
     authLoading: boolean;
     signOut: () => Promise<void>;
+    updateEmail: (email: string) => Promise<User>;
 }
 
-const FALLBACK_USER: User = { id: "", email: "", name: "" };
+const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-const AuthContext = createContext<AuthContextType>({
-    user: FALLBACK_USER,
-    isAuthenticated: false,
-    authLoading: true,
-    signOut: async () => {},
-});
-
-function extractUser(supabaseUser: { id: string; email?: string | null; user_metadata?: Record<string, unknown> }): User {
-    const meta = supabaseUser.user_metadata ?? {};
-    const givenName = meta.given_name as string | undefined;
-    const familyName = meta.family_name as string | undefined;
-    const combinedName = givenName || familyName ? `${givenName ?? ""} ${familyName ?? ""}`.trim() : undefined;
+function toUser(user: SupabaseUser): User {
     return {
-        id: supabaseUser.id,
-        email: supabaseUser.email ?? "",
-        name: (meta.full_name as string | undefined)
-            ?? (meta.name as string | undefined)
-            ?? combinedName
-            ?? "",
+        id: user.id,
+        email: user.email || "",
+        pendingEmail: user.new_email ?? null,
     };
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-    const [user, setUser] = useState<User>(FALLBACK_USER);
-    const [isAuthenticated, setIsAuthenticated] = useState(false);
+    const [user, setUser] = useState<User | null>(null);
     const [authLoading, setAuthLoading] = useState(true);
 
     useEffect(() => {
-        supabase.auth.getSession().then(({ data: { session } }) => {
+        const checkUser = async () => {
+            const {
+                data: { session },
+            } = await supabase.auth.getSession();
+
             if (session?.user) {
-                const u = extractUser(session.user);
-                setUser(u);
-                setIsAuthenticated(true);
-                syncProfileName(session.user.id, session.user.email ?? "", u.name);
+                setUser(toUser(session.user));
             }
             setAuthLoading(false);
-        });
+        };
 
-        const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+        checkUser();
+
+        const {
+            data: { subscription },
+        } = supabase.auth.onAuthStateChange(async (_event, session) => {
             if (session?.user) {
-                const u = extractUser(session.user);
-                setUser(u);
-                setIsAuthenticated(true);
-                syncProfileName(session.user.id, session.user.email ?? "", u.name);
+                setUser(toUser(session.user));
             } else {
-                setUser(FALLBACK_USER);
-                setIsAuthenticated(false);
+                setUser(null);
             }
             setAuthLoading(false);
         });
 
-        return () => subscription.unsubscribe();
+        return () => {
+            subscription.unsubscribe();
+        };
     }, []);
 
     const signOut = async () => {
-        await supabase.auth.signOut();
+        await supabase.auth.signOut({ scope: "local" });
+        setUser(null);
+    };
+
+    const updateEmail = async (email: string) => {
+        const redirectTo =
+            typeof window === "undefined"
+                ? undefined
+                : `${window.location.origin}/account`;
+        const { data, error } = await supabase.auth.updateUser(
+            { email },
+            redirectTo ? { emailRedirectTo: redirectTo } : undefined,
+        );
+
+        if (error) throw error;
+        if (!data.user) throw new Error("Unable to update email");
+
+        const nextUser = toUser(data.user);
+        setUser(nextUser);
+        return nextUser;
     };
 
     return (
-        <AuthContext.Provider value={{ user, isAuthenticated, authLoading, signOut }}>
+        <AuthContext.Provider
+            value={{
+                user,
+                isAuthenticated: !!user,
+                authLoading,
+                signOut,
+                updateEmail,
+            }}
+        >
             {children}
         </AuthContext.Provider>
     );
 }
 
 export function useAuth() {
-    return useContext(AuthContext);
+    const context = useContext(AuthContext);
+    if (context === undefined) {
+        throw new Error("useAuth must be used within an AuthProvider");
+    }
+    return context;
 }

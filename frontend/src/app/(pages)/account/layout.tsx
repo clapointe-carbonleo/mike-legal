@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { Loader2 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
+import { accountTabButtonClassName } from "./accountStyles";
 
 interface TabDef {
     id: string;
@@ -13,7 +14,16 @@ interface TabDef {
 
 const TABS: TabDef[] = [
     { id: "general", label: "General", href: "/account" },
-    { id: "models", label: "Models & API Keys", href: "/account/models" },
+    { id: "features", label: "Features", href: "/account/features" },
+    {
+        id: "privacy-data",
+        label: "Privacy & Data",
+        href: "/account/privacy-data",
+    },
+    { id: "security", label: "Security", href: "/account/security" },
+    { id: "models", label: "Model Preferences", href: "/account/models" },
+    { id: "api-keys", label: "API Keys", href: "/account/api-keys" },
+    { id: "connectors", label: "Connectors", href: "/account/connectors" },
 ];
 
 export default function AccountLayout({
@@ -33,8 +43,8 @@ export default function AccountLayout({
 
     if (authLoading) {
         return (
-            <div className="h-dvh bg-background flex items-center justify-center">
-                <Loader2 className="h-8 w-8 animate-spin text-[#898344]" />
+            <div className="h-dvh flex items-center justify-center">
+                <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
             </div>
         );
     }
@@ -44,38 +54,56 @@ export default function AccountLayout({
     }
 
     return (
-        <div className="flex flex-col h-full md:overflow-y-auto px-6 py-6 md:py-10">
-            <div className="max-w-5xl w-full mx-auto">
-                <h1 className="text-4xl font-bold mb-8 font-sans">
+        <div className="flex h-full flex-col overflow-y-auto">
+            <header className="mx-auto flex h-16 w-full max-w-5xl shrink-0 items-end px-6 pb-2 md:h-24 md:pb-4">
+                <h1 className="text-4xl font-medium font-eb-garamond">
                     Settings
                 </h1>
+            </header>
 
-                <div className="flex flex-col md:flex-row gap-6 md:gap-10">
+            <main className="mx-auto w-full max-w-5xl flex-1 px-6 pb-10 pt-4 md:pt-6">
+                <div className="grid grid-cols-1 gap-y-6 md:grid-cols-[224px_minmax(0,1fr)] md:gap-x-10">
                     <nav
                         aria-label="Settings"
-                        className="md:w-56 shrink-0 flex md:flex-col gap-1 overflow-x-auto"
+                        className="z-10 -ml-3 min-w-0 self-start md:sticky md:top-4"
                     >
-                        {TABS.map((tab) => {
-                            const active = pathname === tab.href;
-                            return (
-                                <button
-                                    key={tab.id}
-                                    onClick={() => router.push(tab.href)}
-                                    className={`text-left whitespace-nowrap px-3 py-2 rounded-md text-sm font-medium transition-colors ${
-                                        active
-                                            ? "bg-[#F5F5F5] text-[#292629]"
-                                            : "text-[#292629]/50 hover:text-[#292629] hover:bg-[#F5F5F5]"
-                                    }`}
-                                >
-                                    {tab.label}
-                                </button>
-                            );
-                        })}
+                        <div className="-m-1 min-w-0 p-1">
+                            <div className="-m-1 min-w-0 overflow-x-auto overflow-y-hidden p-1">
+                                <ul className="mb-0 flex gap-1 md:flex-col">
+                                    {TABS.map((tab) => {
+                                        const active =
+                                            pathname === tab.href ||
+                                            (tab.href !== "/account" &&
+                                                pathname.startsWith(tab.href));
+                                        return (
+                                            <li key={tab.id}>
+                                                <button
+                                                    type="button"
+                                                    aria-current={
+                                                        active
+                                                            ? "page"
+                                                            : undefined
+                                                    }
+                                                    onClick={() =>
+                                                        router.push(tab.href)
+                                                    }
+                                                    className={accountTabButtonClassName(
+                                                        active,
+                                                    )}
+                                                >
+                                                    {tab.label}
+                                                </button>
+                                            </li>
+                                        );
+                                    })}
+                                </ul>
+                            </div>
+                        </div>
                     </nav>
 
-                    <div className="flex-1 min-w-0">{children}</div>
+                    <div className="min-w-0 outline-none">{children}</div>
                 </div>
-            </div>
+            </main>
         </div>
     );
 }

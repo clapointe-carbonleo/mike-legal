@@ -11,10 +11,11 @@ import {
 import { useChatHistoryContext } from "@/app/contexts/ChatHistoryContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { OwnerOnlyModal } from "@/app/components/shared/OwnerOnlyModal";
-import type { MikeChat } from "@/app/components/shared/types";
+import type { Chat } from "@/app/components/shared/types";
+import { cn } from "@/lib/utils";
 
 interface Props {
-    chat: MikeChat;
+    chat: Chat;
     isActive: boolean;
     onSelect: () => void;
     projectName?: string;
@@ -48,9 +49,10 @@ export function SidebarChatItem({ chat, isActive, onSelect, projectName }: Props
 
     return (
         <div
-            className={`group relative flex items-center w-full h-9 rounded-md transition-colors border-l-2 ${
-                isActive ? "bg-[#FEEA0F]/10 border-l-[#FEEA0F]" : "hover:bg-[#F5F5F5] border-l-transparent"
-            }`}
+            className={cn(
+                "group relative flex items-center w-full h-9 rounded-md transition-colors",
+                isActive ? "bg-gray-200/60" : "hover:bg-gray-100",
+            )}
         >
             {isRenaming ? (
                 <div className="flex items-center w-full px-2 py-1">
@@ -63,17 +65,17 @@ export function SidebarChatItem({ chat, isActive, onSelect, projectName }: Props
                             if (e.key === "Enter") void handleRenameSave();
                             if (e.key === "Escape") handleRenameCancel();
                         }}
-                        className="flex-1 bg-white shadow-inner rounded px-1 py-0.5 text-sm focus:outline-none focus:ring-1 focus:ring-[#898344]"
+                        className="flex-1 bg-white shadow-inner rounded px-1 py-0.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
                     />
                     <button
                         onClick={() => void handleRenameSave()}
-                        className="ml-1.5 py-2 hover:bg-[#C7C7B2]/40 rounded text-green-600"
+                        className="ml-1.5 py-2 hover:bg-gray-200 rounded text-green-600"
                     >
                         <Check className="h-3 w-3" />
                     </button>
                     <button
                         onClick={handleRenameCancel}
-                        className="ml-1 py-2 hover:bg-[#C7C7B2]/40 rounded text-red-600"
+                        className="ml-1 py-2 hover:bg-gray-200 rounded text-red-600"
                     >
                         <X className="h-3 w-3" />
                     </button>
@@ -91,12 +93,12 @@ export function SidebarChatItem({ chat, isActive, onSelect, projectName }: Props
                             e.currentTarget.scrollTo({ left: 0, behavior: "smooth" });
                         }}
                         className={`flex-1 min-w-0 text-left px-3 py-2 text-xs overflow-x-hidden whitespace-nowrap scrollbar-none ${
-                            isActive ? "text-[#292629]" : "text-[#292629]/80"
+                            isActive ? "text-gray-900" : "text-gray-700"
                         }`}
                         title={projectName ? `${projectName}: ${chat.title ?? "Untitled chat"}` : (chat.title ?? "Untitled chat")}
                     >
                         {projectName && (
-                            <span className="text-[#292629]/40 font-normal">{projectName}: </span>
+                            <span className="text-gray-400 font-normal">{projectName}: </span>
                         )}
                         {chat.title ?? "Untitled chat"}
                     </button>
@@ -104,7 +106,7 @@ export function SidebarChatItem({ chat, isActive, onSelect, projectName }: Props
                     <DropdownMenu>
                         <DropdownMenuTrigger asChild>
                             <button
-                                className={`p-1 mr-1 text-[#292629]/50 transition-opacity hover:text-[#292629] ${
+                                className={`mr-1 rounded-md p-1 text-gray-500 transition-all hover:bg-gray-200 hover:text-gray-900 ${
                                     isActive
                                         ? "opacity-100"
                                         : "opacity-0 group-hover:opacity-100"

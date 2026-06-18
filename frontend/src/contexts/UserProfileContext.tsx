@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, useContext, ReactNode } from "react";
+import type { ApiKeyState } from "@/app/lib/mikeApi";
 
 interface UserProfile {
     displayName: string | null;
@@ -10,8 +11,12 @@ interface UserProfile {
     creditsRemaining: number;
     tier: string;
     tabularModel: string;
+    titleModel: string;
     claudeApiKey: string | null;
     geminiApiKey: string | null;
+    apiKeys: ApiKeyState;
+    legalResearchUs: boolean;
+    mfaOnLogin: boolean;
 }
 
 interface UserProfileContextType {
@@ -19,8 +24,10 @@ interface UserProfileContextType {
     loading: boolean;
     updateDisplayName: (name: string) => Promise<boolean>;
     updateOrganisation: (organisation: string) => Promise<boolean>;
-    updateModelPreference: (field: "tabularModel", value: string) => Promise<boolean>;
-    updateApiKey: (provider: "claude" | "gemini", value: string | null) => Promise<boolean>;
+    updateModelPreference: (field: string, value: string) => Promise<boolean>;
+    updateApiKey: (provider: string, value: string | null) => Promise<boolean>;
+    updateLegalResearchUs: (value: boolean) => Promise<boolean>;
+    updateMfaOnLogin: (value: boolean) => Promise<boolean>;
     reloadProfile: () => Promise<void>;
     incrementMessageCredits: () => Promise<boolean>;
 }
@@ -33,8 +40,18 @@ const STATIC_PROFILE: UserProfile = {
     creditsRemaining: 999999,
     tier: "Pro",
     tabularModel: "gemini-3-flash-preview",
+    titleModel: "claude-sonnet-4-6",
     claudeApiKey: "configured",
     geminiApiKey: "configured",
+    apiKeys: {
+        claude: { configured: true, source: "env" },
+        gemini: { configured: true, source: "env" },
+        openai: { configured: false, source: null },
+        openrouter: { configured: false, source: null },
+        courtlistener: { configured: false, source: null },
+    },
+    legalResearchUs: true,
+    mfaOnLogin: false,
 };
 
 const UserProfileContext = createContext<UserProfileContextType>({
@@ -44,6 +61,8 @@ const UserProfileContext = createContext<UserProfileContextType>({
     updateOrganisation: async () => true,
     updateModelPreference: async () => true,
     updateApiKey: async () => true,
+    updateLegalResearchUs: async () => true,
+    updateMfaOnLogin: async () => true,
     reloadProfile: async () => {},
     incrementMessageCredits: async () => true,
 });
@@ -57,6 +76,8 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
             updateOrganisation: async () => true,
             updateModelPreference: async () => true,
             updateApiKey: async () => true,
+            updateLegalResearchUs: async () => true,
+            updateMfaOnLogin: async () => true,
             reloadProfile: async () => {},
             incrementMessageCredits: async () => true,
         }}>

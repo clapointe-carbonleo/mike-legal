@@ -40,28 +40,28 @@ export function PreResponseWrapper({
     const childrenGapClass = compact ? "gap-2.5" : "gap-4";
 
     return (
-        <div className="border border-[#C7C7B2] rounded-lg px-3 py-2">
+        <div className="rounded-xl border border-white/70 bg-white/55 px-3 py-2 shadow-[0_3px_9px_rgba(15,23,42,0.03),inset_0_1px_0_rgba(255,255,255,0.9),inset_0_-4px_9px_rgba(255,255,255,0.05)] backdrop-blur-2xl">
             <button
                 type="button"
                 onClick={() => {
                     setUserToggled(true);
                     setIsOpen((v) => !v);
                 }}
-                className={`w-full flex items-center justify-between font-sans text-[#292629]/50 hover:text-[#292629]/80 transition-colors ${buttonTextClass}`}
+                className={`w-full flex items-center justify-between font-serif text-gray-500 hover:text-gray-700 transition-colors ${buttonTextClass}`}
             >
                 <span className="flex items-baseline min-w-0">
                     <span className="truncate">{label}</span>
                     {isStreaming && (
                         <span className="inline-flex ml-1 shrink-0 items-baseline">
-                            <span className="w-0.5 h-0.5 rounded-full bg-[#C7C7B2] mr-0.5 animate-[bounce_1.4s_infinite_0s]" />
-                            <span className="w-0.5 h-0.5 rounded-full bg-[#C7C7B2] mr-0.5 animate-[bounce_1.4s_infinite_0.2s]" />
-                            <span className="w-0.5 h-0.5 rounded-full bg-[#C7C7B2] animate-[bounce_1.4s_infinite_0.4s]" />
+                            <span className="w-0.5 h-0.5 rounded-full bg-gray-400 mr-0.5 animate-[bounce_1.4s_infinite_0s]" />
+                            <span className="w-0.5 h-0.5 rounded-full bg-gray-400 mr-0.5 animate-[bounce_1.4s_infinite_0.2s]" />
+                            <span className="w-0.5 h-0.5 rounded-full bg-gray-400 animate-[bounce_1.4s_infinite_0.4s]" />
                         </span>
                     )}
                 </span>
                 <ChevronDown
                     size={12}
-                    className={`shrink-0 ml-2 transition-transform duration-200 ${isOpen ? "" : "-rotate-90"}`}
+                    className={`relative top-px shrink-0 ml-2 transition-transform duration-200 ${isOpen ? "" : "-rotate-90"}`}
                 />
             </button>
             {isOpen && (
