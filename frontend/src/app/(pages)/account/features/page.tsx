@@ -21,7 +21,7 @@ export default function FeaturesPage() {
         };
     }, []);
 
-    const persistedLegalResearchUs = profile?.legalResearchUs ?? true;
+    const persistedLegalResearchUs = profile?.legalResearchUs ?? false;
     const usEnabled = draftLegalResearchUs ?? persistedLegalResearchUs;
     const hasChanges =
         draftLegalResearchUs !== null &&
