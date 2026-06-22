@@ -50,7 +50,7 @@ const STATIC_PROFILE: UserProfile = {
         openrouter: { configured: false, source: null },
         courtlistener: { configured: false, source: null },
     },
-    legalResearchUs: true,
+    legalResearchUs: false,
     mfaOnLogin: false,
 };
 
