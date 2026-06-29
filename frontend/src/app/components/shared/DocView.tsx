@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Loader2, ZoomIn, ZoomOut } from "lucide-react";
+import { ChevronLeft, ChevronRight, Loader2, ZoomIn, ZoomOut } from "lucide-react";
 import { useFetchSingleDoc } from "@/app/hooks/useFetchSingleDoc";
 import { DocxView } from "./DocxView";
 import type { CitationQuote } from "./types";
@@ -500,6 +500,28 @@ export function DocView({
         rehighlightQuotes(quoteList);
     }, [quoteKey, quoteFocusKey, rehighlightQuotes]); // eslint-disable-line react-hooks/exhaustive-deps
 
+    function scrollToPage(page: number) {
+        const target = renderedPagesRef.current[page - 1];
+        if (target && scrollContainerRef.current) {
+            scrollContainerRef.current.scrollTo({ top: target.wrapper.offsetTop, behavior: "smooth" });
+        }
+    }
+
+    function handlePagePrev() {
+        const prev = Math.max(1, currentPageRef.current - 1);
+        scrollToPage(prev);
+    }
+
+    function handlePageNext() {
+        const next = Math.min(numPages, currentPageRef.current + 1);
+        scrollToPage(next);
+    }
+
+    function handlePageInputChange(e: React.ChangeEvent<HTMLInputElement>) {
+        const val = parseInt(e.target.value, 10);
+        if (!isNaN(val) && val >= 1 && val <= numPages) scrollToPage(val);
+    }
+
     function handleZoomIn() {
         const next = Math.min(
             ZOOM_MAX,
@@ -567,11 +589,31 @@ export function DocView({
             </div>
             {numPages > 0 && (
                 <>
-                    {/* Page counter — bottom left */}
-                    <div className="absolute bottom-4 left-4 pointer-events-none">
-                        <span className="flex items-center px-3 py-1.5 rounded-full text-xs font-medium tabular-nums text-gray-700 bg-white/25 backdrop-blur-md border border-white/30 shadow-md">
-                            {currentPage}/{numPages}
-                        </span>
+                    {/* Page navigation — bottom left */}
+                    <div className="absolute bottom-4 left-4 flex items-center gap-px rounded-full bg-white/25 backdrop-blur-md border border-white/30 shadow-md px-1 py-1">
+                        <button
+                            onClick={handlePagePrev}
+                            disabled={currentPage <= 1}
+                            className="flex items-center justify-center w-7 h-7 rounded-full text-gray-600 hover:bg-white/80 disabled:opacity-30 transition-colors"
+                        >
+                            <ChevronLeft className="h-3.5 w-3.5" />
+                        </button>
+                        <input
+                            type="number"
+                            min={1}
+                            max={numPages}
+                            value={currentPage}
+                            onChange={handlePageInputChange}
+                            className="w-8 text-center text-xs font-medium text-gray-700 bg-transparent outline-none tabular-nums [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                        />
+                        <span className="text-xs text-gray-500 select-none">/ {numPages}</span>
+                        <button
+                            onClick={handlePageNext}
+                            disabled={currentPage >= numPages}
+                            className="flex items-center justify-center w-7 h-7 rounded-full text-gray-600 hover:bg-white/80 disabled:opacity-30 transition-colors"
+                        >
+                            <ChevronRight className="h-3.5 w-3.5" />
+                        </button>
                     </div>
 
                     {/* Zoom controls — bottom right */}
