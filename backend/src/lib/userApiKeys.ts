@@ -136,10 +136,7 @@ export async function getUserApiKeyStatus(
         .from("user_api_keys")
         .select("provider")
         .eq("user_id", userId);
-    if (error) {
-        if ((error as any)?.code === "42P01") return status;
-        throw error;
-    }
+    if (error) return status;
 
     for (const row of data ?? []) {
         const provider = normalizeApiKeyProvider(String(row.provider));
@@ -168,10 +165,7 @@ export async function getUserApiKeys(
         .from("user_api_keys")
         .select("provider, encrypted_key, iv, auth_tag")
         .eq("user_id", userId);
-    if (error) {
-        if ((error as any)?.code === "42P01") return apiKeys;
-        throw error;
-    }
+    if (error) return apiKeys;
 
     for (const row of (data ?? []) as EncryptedKeyRow[]) {
         const provider = normalizeApiKeyProvider(row.provider);
