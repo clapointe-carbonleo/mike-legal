@@ -824,8 +824,11 @@ export function buildMessages(
 
 export async function extractPdfText(buf: ArrayBuffer): Promise<string> {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const pdfParse = require("pdf-parse") as (b: Buffer) => Promise<{ text: string }>;
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const pdfParse = require("pdf-parse/lib/pdf-parse.js") as (
+      buffer: Buffer,
+      options?: { max?: number },
+    ) => Promise<{ text: string; numpages: number }>;
     const data = await pdfParse(Buffer.from(buf));
     return data.text ?? "";
   } catch (err) {
@@ -1677,11 +1680,13 @@ async function readDocumentContent(
       );
     }
     let text: string;
+    console.log(`[read_document] file_type="${docInfo.file_type}" filename="${docInfo.filename}" bytes=${raw.byteLength}`);
     if (docInfo.file_type === "pdf") {
       text = await extractPdfText(raw);
-      devLog(
-        `[read_document] pdf extracted length=${text.length} for filename="${docInfo.filename}"`,
-      );
+      console.log(`[read_document] pdf extracted length=${text.length} filename="${docInfo.filename}"`);
+      if (!text) {
+        text = `[PDF text extraction returned empty for "${docInfo.filename}". The PDF may use image-based pages or unsupported encoding. Raw byte length: ${raw.byteLength}]`;
+      }
     } else if (docInfo.file_type === "docx") {
       // Use the same flattening as the edit_document matcher so the
       // LLM sees exactly the characters it can anchor against.
