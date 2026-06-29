@@ -1,4 +1,4 @@
-import zlib from "zlib";
+import path from "path";
 import {
   downloadFile,
   generatedDocKey,
@@ -44,6 +44,14 @@ import {
 } from "./llm";
 import { safeErrorMessage } from "./safeError";
 
+const STANDARD_FONT_DATA_URL = (() => {
+  try {
+    const pkgPath = require.resolve("pdfjs-dist/package.json");
+    return path.join(path.dirname(pkgPath), "standard_fonts") + path.sep;
+  } catch {
+    return undefined;
+  }
+})();
 
 const isDev = process.env.NODE_ENV !== "production";
 const devLog = (...args: Parameters<typeof console.log>) => {
@@ -825,119 +833,37 @@ export function buildMessages(
 
 export async function extractPdfText(buf: ArrayBuffer): Promise<string> {
   try {
-    return extractPdfTextNative(Buffer.from(buf));
+    const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs" as string);
+    const pdf = await (
+      pdfjsLib as unknown as {
+        getDocument: (opts: unknown) => {
+          promise: Promise<{
+            numPages: number;
+            getPage: (n: number) => Promise<{
+              getTextContent: () => Promise<{
+                items: { str?: string }[];
+              }>;
+            }>;
+          }>;
+        };
+      }
+    ).getDocument({
+      data: new Uint8Array(buf),
+      standardFontDataUrl: STANDARD_FONT_DATA_URL,
+    }).promise;
+    const parts: string[] = [];
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const textContent = await page.getTextContent();
+      parts.push(
+        `[Page ${i}]\n${textContent.items.map((it) => it.str ?? "").join(" ")}`,
+      );
+    }
+    return parts.join("\n\n");
   } catch (err) {
-    console.error("[extractPdfText] failed:", err instanceof Error ? err.message : String(err));
+    console.error("[extractPdfText] pdfjs failed:", err instanceof Error ? err.message : String(err));
     return "";
   }
-}
-
-function extractPdfTextNative(buf: Buffer): string {
-  const latin1 = buf.toString("binary");
-  const texts: string[] = [];
-
-  // Match every stream object in the PDF
-  const streamRe = /<<([\s\S]*?)>>\s*stream\r?\n([\s\S]*?)\r?\nendstream/g;
-  let m: RegExpExecArray | null;
-  while ((m = streamRe.exec(latin1)) !== null) {
-    const dict = m[1];
-    const rawStream = m[2];
-
-    // Skip image XObjects
-    if (/\/Subtype\s*\/Image/.test(dict)) continue;
-
-    // Determine filter
-    const filterMatch = dict.match(new RegExp("/Filter\\s*(?:/([\\w]+)|\\[\\s*/([\\w]+)"));
-    const filter = filterMatch?.[1] ?? filterMatch?.[2] ?? null;
-
-    let content: string;
-    if (filter === "FlateDecode") {
-      try {
-        const compressed = Buffer.from(rawStream, "binary");
-        let decompressed: Buffer;
-        try {
-          decompressed = zlib.inflateSync(compressed);
-        } catch {
-          decompressed = zlib.inflateRawSync(compressed);
-        }
-        content = decompressed.toString("binary");
-      } catch {
-        continue;
-      }
-    } else if (!filter) {
-      content = rawStream;
-    } else {
-      continue;
-    }
-
-    const text = extractTextOps(content);
-    if (text.trim()) texts.push(text);
-  }
-
-  return texts.join("\n").replace(/[ \t]{2,}/g, " ").trim();
-}
-
-function extractTextOps(content: string): string {
-  const parts: string[] = [];
-  // BT ... ET blocks contain text operators
-  const btEt = /BT([\s\S]*?)ET/g;
-  let block: RegExpExecArray | null;
-  while ((block = btEt.exec(content)) !== null) {
-    const b = block[1];
-    // (literal) Tj  or  [(arr)] TJ
-    const litTj = /\(([^)\\]*(?:\\.[^)\\]*)*)\)\s*(?:Tj|T'|')/g;
-    let lm: RegExpExecArray | null;
-    while ((lm = litTj.exec(b)) !== null) {
-      const s = decodePdfLiteral(lm[1]);
-      if (s) parts.push(s);
-    }
-    const arrTj = /\[((?:[^\[\]\\]|\\[\s\S])*)\]\s*TJ/g;
-    let am: RegExpExecArray | null;
-    while ((am = arrTj.exec(b)) !== null) {
-      const inner = am[1];
-      const litInArr = /\(([^)\\]*(?:\\.[^)\\]*)*)\)/g;
-      let im: RegExpExecArray | null;
-      while ((im = litInArr.exec(inner)) !== null) {
-        const s = decodePdfLiteral(im[1]);
-        if (s) parts.push(s);
-      }
-      // Hex strings in TJ arrays: <hexhex>
-      const hexInArr = /<([0-9A-Fa-f\s]*)>/g;
-      let hm: RegExpExecArray | null;
-      while ((hm = hexInArr.exec(inner)) !== null) {
-        const s = hexToAscii(hm[1]);
-        if (s) parts.push(s);
-      }
-    }
-    // Hex strings: <hexhex> Tj
-    const hexTj = /<([0-9A-Fa-f\s]*)>\s*(?:Tj|T'|')/g;
-    let hm2: RegExpExecArray | null;
-    while ((hm2 = hexTj.exec(b)) !== null) {
-      const s = hexToAscii(hm2[1]);
-      if (s) parts.push(s);
-    }
-    parts.push(" ");
-  }
-  return parts.join("").replace(/\s+/g, " ").trim();
-}
-
-function decodePdfLiteral(s: string): string {
-  return s
-    .replace(/\\n/g, "\n").replace(/\\r/g, "\r").replace(/\\t/g, "\t")
-    .replace(/\\b/g, "\b").replace(/\\f/g, "\f")
-    .replace(/\\\\/g, "\\").replace(/\\\(/g, "(").replace(/\\\)/g, ")")
-    .replace(/\\(\d{3})/g, (_, o) => String.fromCharCode(parseInt(o, 8)));
-}
-
-function hexToAscii(hex: string): string {
-  const h = hex.replace(/\s/g, "");
-  let out = "";
-  for (let i = 0; i < h.length; i += 2) {
-    const code = parseInt(h.slice(i, i + 2), 16);
-    if (code >= 32 && code < 127) out += String.fromCharCode(code);
-    else if (code === 10 || code === 13) out += " ";
-  }
-  return out;
 }
 
 export async function generateDocx(
