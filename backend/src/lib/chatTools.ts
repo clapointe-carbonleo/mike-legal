@@ -1,3 +1,4 @@
+import path from "path";
 import Anthropic from "@anthropic-ai/sdk";
 import {
   downloadFile,
@@ -43,6 +44,15 @@ import {
   type OpenAIToolSchema,
 } from "./llm";
 import { safeErrorMessage } from "./safeError";
+
+const STANDARD_FONT_DATA_URL = (() => {
+  try {
+    const pkgPath = require.resolve("pdfjs-dist/package.json");
+    return path.join(path.dirname(pkgPath), "standard_fonts") + path.sep;
+  } catch {
+    return undefined;
+  }
+})();
 
 const isDev = process.env.NODE_ENV !== "production";
 const devLog = (...args: Parameters<typeof console.log>) => {
@@ -823,7 +833,41 @@ export function buildMessages(
 }
 
 export async function extractPdfText(buf: ArrayBuffer): Promise<string> {
-  // Try pdf-parse first — ncc-bundled, works in Vercel, handles text-based PDFs
+  // 1. pdfjs-dist — original upstream approach, handles text-based PDFs
+  try {
+    const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs" as string);
+    const pdf = await (
+      pdfjsLib as unknown as {
+        getDocument: (opts: unknown) => {
+          promise: Promise<{
+            numPages: number;
+            getPage: (n: number) => Promise<{
+              getTextContent: () => Promise<{ items: { str?: string }[] }>;
+            }>;
+          }>;
+        };
+      }
+    ).getDocument({
+      data: new Uint8Array(buf),
+      standardFontDataUrl: STANDARD_FONT_DATA_URL,
+    }).promise;
+    const parts: string[] = [];
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const textContent = await page.getTextContent();
+      parts.push(`[Page ${i}]\n${textContent.items.map((it) => it.str ?? "").join(" ")}`);
+    }
+    const text = parts.join("\n\n");
+    if (text.trim()) {
+      console.log(`[extractPdfText] pdfjs extracted ${text.length} chars`);
+      return text;
+    }
+    console.log("[extractPdfText] pdfjs returned empty, trying pdf-parse");
+  } catch (pdfjsErr) {
+    console.error("[extractPdfText] pdfjs error:", pdfjsErr instanceof Error ? pdfjsErr.message : String(pdfjsErr));
+  }
+
+  // 2. pdf-parse — ncc-bundled, same pattern as countPdfPages (works in prod)
   try {
     const pdfParse = require("pdf-parse/lib/pdf-parse.js") as (
       buffer: Buffer,
@@ -833,12 +877,12 @@ export async function extractPdfText(buf: ArrayBuffer): Promise<string> {
       console.log(`[extractPdfText] pdf-parse got ${data.text.length} chars`);
       return data.text;
     }
-    console.log("[extractPdfText] pdf-parse returned empty, trying Claude API");
+    console.log("[extractPdfText] pdf-parse returned empty, trying Claude");
   } catch (parseErr) {
     console.error("[extractPdfText] pdf-parse error:", parseErr instanceof Error ? parseErr.message : String(parseErr));
   }
 
-  // Fallback: Claude standard API (SDK 0.90+ has DocumentBlockParam natively, no beta flag needed)
+  // 3. Claude standard API — handles scanned/image PDFs via vision (SDK 0.90+ supports DocumentBlockParam natively)
   try {
     const apiKey = process.env.ANTHROPIC_API_KEY;
     console.log(`[extractPdfText] Claude fallback, key=${apiKey ? "set" : "MISSING"}`);
