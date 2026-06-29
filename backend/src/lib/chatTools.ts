@@ -1,4 +1,3 @@
-import path from "path";
 import Anthropic from "@anthropic-ai/sdk";
 import {
   downloadFile,
@@ -44,15 +43,6 @@ import {
   type OpenAIToolSchema,
 } from "./llm";
 import { safeErrorMessage } from "./safeError";
-
-const STANDARD_FONT_DATA_URL = (() => {
-  try {
-    const pkgPath = require.resolve("pdfjs-dist/package.json");
-    return path.join(path.dirname(pkgPath), "standard_fonts") + path.sep;
-  } catch {
-    return undefined;
-  }
-})();
 
 const isDev = process.env.NODE_ENV !== "production";
 const devLog = (...args: Parameters<typeof console.log>) => {
