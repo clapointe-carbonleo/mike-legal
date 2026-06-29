@@ -1,4 +1,4 @@
-import Anthropic from "@anthropic-ai/sdk";
+import path from "path";
 import {
   downloadFile,
   generatedDocKey,
@@ -43,6 +43,15 @@ import {
   type OpenAIToolSchema,
 } from "./llm";
 import { safeErrorMessage } from "./safeError";
+
+const STANDARD_FONT_DATA_URL = (() => {
+  try {
+    const pkgPath = require.resolve("pdfjs-dist/package.json");
+    return path.join(path.dirname(pkgPath), "standard_fonts") + path.sep;
+  } catch {
+    return undefined;
+  }
+})();
 
 const isDev = process.env.NODE_ENV !== "production";
 const devLog = (...args: Parameters<typeof console.log>) => {
@@ -824,37 +833,39 @@ export function buildMessages(
 
 export async function extractPdfText(buf: ArrayBuffer): Promise<string> {
   try {
-    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-    const base64 = Buffer.from(buf).toString("base64");
-    const response = await client.beta.messages.create({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 8192,
-      betas: ["pdfs-2024-09-25"],
-      messages: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "document",
-              source: { type: "base64", media_type: "application/pdf", data: base64 },
-            },
-            {
-              type: "text",
-              text: "Extract and return ALL text from this document verbatim, preserving structure (headings, paragraphs, lists, tables). Output only the extracted text, no commentary or explanation.",
-            },
-          ],
-        },
-      ],
-    });
-    const block = response.content[0];
-    if (block?.type === "text") {
-      console.log(`[extractPdfText] Claude extracted ${block.text.length} chars`);
-      return block.text;
+    const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs" as string);
+    const pdf = await (
+      pdfjsLib as unknown as {
+        getDocument: (opts: unknown) => {
+          promise: Promise<{
+            numPages: number;
+            getPage: (n: number) => Promise<{
+              getTextContent: () => Promise<{
+                items: { str?: string }[];
+              }>;
+            }>;
+          }>;
+        };
+      }
+    ).getDocument({
+      data: new Uint8Array(buf),
+      standardFontDataUrl: STANDARD_FONT_DATA_URL,
+    }).promise;
+    const parts: string[] = [];
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const textContent = await page.getTextContent();
+      parts.push(
+        `[Page ${i}]\n${textContent.items.map((it) => it.str ?? "").join(" ")}`,
+      );
     }
+    const result = parts.join("\n\n");
+    console.log(`[extractPdfText] pdfjs extracted ${result.length} chars`);
+    return result;
   } catch (err) {
-    console.error("[extractPdfText] Claude document API failed:", err instanceof Error ? err.message : String(err));
+    console.error("[extractPdfText] pdfjs failed:", err instanceof Error ? err.message : String(err));
+    return "";
   }
-  return "";
 }
 
 export async function generateDocx(
