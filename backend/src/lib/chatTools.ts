@@ -110,6 +110,7 @@ CORE RULES:
 - Be precise, professional, and evidence-aware.
 - Do not fabricate document content.
 - Use at most 10 tool-use rounds per response. Batch independent tool calls and leave room for the final answer.
+- Always write a concluding text response after tool calls. Never end a turn with only tool calls and no text output.
 - If the user selects a workflow with [Workflow: <title> (id: <id>)], immediately call read_workflow with that id and follow the workflow before doing anything else.
 
 DOCUMENT CITATIONS:
@@ -4283,6 +4284,18 @@ export async function runLLMStream(params: {
   }
 
   flushText();
+
+  // Fallback: if tool calls were made but no text was generated, emit a placeholder so the frontend doesn't silently render nothing
+  const hasContent = events.some((e) => e.type === "content");
+  const hadTools = events.some((e) =>
+    ["doc_read", "doc_find", "doc_created", "doc_replicated", "doc_edited", "workflow_applied"].includes(e.type),
+  );
+  if (!hasContent && hadTools) {
+    const fallback = "I reviewed the documents but didn't generate a text response. Please try rephrasing your question.";
+    events.push({ type: "content", text: fallback });
+    fullText += fallback;
+    write(`data: ${JSON.stringify({ type: "content_delta", text: fallback })}\n\n`);
+  }
 
   // Parse and emit citations from <CITATIONS> block
   const { citations: parsedCitations, diagnostics: citationDiagnostics } =
