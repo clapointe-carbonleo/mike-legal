@@ -14,7 +14,8 @@
   ],
   "functions": {
     "src/index.ts": {
-      "maxDuration": 300
+      "maxDuration": 300,
+      "includeFiles": "node_modules/pdf-parse/**"
     }
   }
 }
