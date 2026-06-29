@@ -58,6 +58,7 @@ export function DocView({
     const quoteListRef = useRef<QuoteEntry[]>([]);
     const zoomRef = useRef(1.0);
     const currentPageRef = useRef(1);
+    const renderGenRef = useRef(0);
 
     const quoteList: QuoteEntry[] = useMemo(() => {
         if (quotes?.length)
@@ -182,9 +183,11 @@ export function DocView({
             scrollToPage?: number,
         ) => {
             if (!containerRef.current) return;
+            const gen = ++renderGenRef.current;
             containerRef.current.innerHTML = "";
             renderedPagesRef.current = [];
             const lib = await getPdfJs();
+            if (gen !== renderGenRef.current) return;
             lib.TextLayer.cleanup();
 
             setNumPages(doc.numPages);
@@ -212,6 +215,8 @@ export function DocView({
 
             for (let pageNum = 1; pageNum <= doc.numPages; pageNum++) {
                 const page = await doc.getPage(pageNum);
+                if (gen !== renderGenRef.current) return;
+
                 const viewport = page.getViewport({ scale });
 
                 const wrapper = document.createElement("div");
@@ -242,6 +247,7 @@ export function DocView({
                     }
                     continue;
                 }
+                if (gen !== renderGenRef.current) return;
 
                 const textLayerDiv = document.createElement("div");
                 textLayerDiv.className = "pdf-text-layer";
@@ -259,6 +265,7 @@ export function DocView({
                     viewport,
                 });
                 await textLayer.render();
+                if (gen !== renderGenRef.current) return;
                 const textDivs = textLayer.textDivs;
 
                 renderedPagesRef.current.push({
