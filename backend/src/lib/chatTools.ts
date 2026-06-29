@@ -826,9 +826,10 @@ export async function extractPdfText(buf: ArrayBuffer): Promise<string> {
   try {
     const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
     const base64 = Buffer.from(buf).toString("base64");
-    const response = await client.messages.create({
+    const response = await client.beta.messages.create({
       model: "claude-haiku-4-5-20251001",
       max_tokens: 8192,
+      betas: ["pdfs-2024-09-25"],
       messages: [
         {
           role: "user",
