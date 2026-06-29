@@ -833,7 +833,7 @@ export function buildMessages(
 }
 
 export async function extractPdfText(buf: ArrayBuffer): Promise<string> {
-  // 1. pdfjs-dist — original upstream approach, handles text-based PDFs
+  // 1. pdfjs-dist — same approach as extractPdfMarkdown in tabular.ts (confirmed working in prod)
   try {
     const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs" as string);
     const pdf = await (
@@ -842,26 +842,25 @@ export async function extractPdfText(buf: ArrayBuffer): Promise<string> {
           promise: Promise<{
             numPages: number;
             getPage: (n: number) => Promise<{
-              getTextContent: () => Promise<{ items: { str?: string }[] }>;
+              getTextContent: () => Promise<{ items: { str?: string; hasEOL?: boolean }[] }>;
             }>;
           }>;
         };
       }
-    ).getDocument({
-      data: new Uint8Array(buf),
-      standardFontDataUrl: STANDARD_FONT_DATA_URL,
-    }).promise;
-    const parts: string[] = [];
-    let hasContent = false;
+    ).getDocument({ data: new Uint8Array(buf) }).promise;
+    const pages: string[] = [];
     for (let i = 1; i <= pdf.numPages; i++) {
       const page = await pdf.getPage(i);
-      const textContent = await page.getTextContent();
-      const pageText = textContent.items.map((it) => it.str ?? "").join(" ");
-      if (pageText.trim()) hasContent = true;
-      parts.push(`[Page ${i}]\n${pageText}`);
+      const tc = await page.getTextContent();
+      const pageText = tc.items
+        .filter((it): it is { str: string } => "str" in it)
+        .map((it) => it.str)
+        .join(" ")
+        .trim();
+      if (pageText) pages.push(`[Page ${i}]\n${pageText}`);
     }
-    if (hasContent) {
-      const text = parts.join("\n\n");
+    if (pages.length > 0) {
+      const text = pages.join("\n\n");
       console.log(`[extractPdfText] pdfjs extracted ${text.length} chars`);
       return text;
     }
