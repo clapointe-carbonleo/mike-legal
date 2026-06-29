@@ -173,50 +173,6 @@ app.use("/case-law", caseLawRouter);
 
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
-// Debug: test PDF extraction pipeline with a tiny synthetic PDF
-app.get("/debug/pdf-extract", async (_req, res) => {
-  const results: Record<string, unknown> = {};
-  // Minimal valid PDF with the text "Hello PDF debug"
-  const minimalPdf = Buffer.from(
-    "JVBERi0xLjIgCjEgMCBvYmoKPDwgL1R5cGUgL0NhdGFsb2cgL1BhZ2VzIDIgMCBSID4+CmVuZG9iagoyIDAgb2JqCjw8IC9UeXBlIC9QYWdlcyAvS2lkcyBbMyAwIFJdIC9Db3VudCAxID4+CmVuZG9iagozIDAgb2JqCjw8IC9UeXBlIC9QYWdlIC9QYXJlbnQgMiAwIFIgL01lZGlhQm94IFswIDAgMzAwIDMwMF0gL0NvbnRlbnRzIDQgMCBSIC9SZXNvdXJjZXMgPDwgL0ZvbnQgPDwgL0YxIDUgMCBSID4+ID4+ID4+CmVuZG9iago0IDAgb2JqCjw8IC9MZW5ndGggNDQgPj4Kc3RyZWFtCkJUIC9GMSAxMiBUZiAxMDAgMjAwIFRkIChIZWxsbyBQREYgZGVidWcpIFRqIEVUCmVuZHN0cmVhbQplbmRvYmoKNSAwIG9iago8PCAvVHlwZSAvRm9udCAvU3VidHlwZSAvVHlwZTEgL0Jhc2VGb250IC9IZWx2ZXRpY2EgPj4KZW5kb2JqCnhyZWYKMCA2CjAwMDAwMDAwMDAgNjU1MzUgZiAKMDAwMDAwMDAwOSAwMDAwMCBuIAowMDAwMDAwMDYyIDAwMDAwIG4gCjAwMDAwMDAxMTUgMDAwMDAgbiAKMDAwMDAwMDI3NiAwMDAwMCBuIAowMDAwMDAwMzY4IDAwMDAwIG4gCnRyYWlsZXIKPDwgL1NpemUgNiAvUm9vdCAxIDAgUiA+PgpzdGFydHhyZWYKNDQ1CiUlRU9G",
-    "base64",
-  );
-
-  // 1. pdf-parse
-  try {
-    const pdfParse = require("pdf-parse/lib/pdf-parse.js") as (
-      b: Buffer,
-    ) => Promise<{ text: string }>;
-    const d = await pdfParse(minimalPdf);
-    results.pdfParse = { ok: true, chars: d.text?.length ?? 0, preview: d.text?.slice(0, 80) };
-  } catch (e) {
-    results.pdfParse = { ok: false, error: String(e) };
-  }
-
-  // 2. Claude document API
-  try {
-    const Anthropic = (await import("@anthropic-ai/sdk")).default;
-    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-    const b64 = minimalPdf.toString("base64");
-    const resp = await client.messages.create({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 256,
-      messages: [{
-        role: "user",
-        content: [
-          { type: "document", source: { type: "base64", media_type: "application/pdf", data: b64 } } as any,
-          { type: "text", text: "What text is in this PDF? Reply with just the text." },
-        ],
-      }],
-    });
-    const block = resp.content[0];
-    results.claudeApi = { ok: true, blockType: block?.type, text: block?.type === "text" ? (block as any).text : null };
-  } catch (e) {
-    results.claudeApi = { ok: false, error: String(e) };
-  }
-
-  res.json(results);
-});
 
 app.listen(PORT, () => {
   console.log(`Mike backend running on port ${PORT}`);
