@@ -1,4 +1,3 @@
-import path from "path";
 import {
   downloadFile,
   generatedDocKey,
@@ -43,15 +42,6 @@ import {
   type OpenAIToolSchema,
 } from "./llm";
 import { safeErrorMessage } from "./safeError";
-
-const STANDARD_FONT_DATA_URL = (() => {
-  try {
-    const pkgPath = require.resolve("pdfjs-dist/package.json");
-    return path.join(path.dirname(pkgPath), "standard_fonts") + path.sep;
-  } catch {
-    return undefined;
-  }
-})();
 
 const isDev = process.env.NODE_ENV !== "production";
 const devLog = (...args: Parameters<typeof console.log>) => {
@@ -833,35 +823,15 @@ export function buildMessages(
 
 export async function extractPdfText(buf: ArrayBuffer): Promise<string> {
   try {
-    const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs" as string);
-    const pdf = await (
-      pdfjsLib as unknown as {
-        getDocument: (opts: unknown) => {
-          promise: Promise<{
-            numPages: number;
-            getPage: (n: number) => Promise<{
-              getTextContent: () => Promise<{
-                items: { str?: string }[];
-              }>;
-            }>;
-          }>;
-        };
-      }
-    ).getDocument({
-      data: new Uint8Array(buf),
-      standardFontDataUrl: STANDARD_FONT_DATA_URL,
-    }).promise;
-    const parts: string[] = [];
-    for (let i = 1; i <= pdf.numPages; i++) {
-      const page = await pdf.getPage(i);
-      const textContent = await page.getTextContent();
-      parts.push(
-        `[Page ${i}]\n${textContent.items.map((it) => it.str ?? "").join(" ")}`,
-      );
-    }
-    return parts.join("\n\n");
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const pdfParse = require("pdf-parse/lib/pdf-parse.js") as (
+      buffer: Buffer,
+      options?: { max?: number },
+    ) => Promise<{ text: string; numpages: number }>;
+    const data = await pdfParse(Buffer.from(buf));
+    return data.text ?? "";
   } catch (err) {
-    console.error("[extractPdfText] pdfjs failed:", err instanceof Error ? err.message : String(err));
+    console.error("[extractPdfText] pdf-parse failed:", err instanceof Error ? err.message : String(err));
     return "";
   }
 }
