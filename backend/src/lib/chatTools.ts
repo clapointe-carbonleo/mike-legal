@@ -822,6 +822,7 @@ export function buildMessages(
 }
 
 export async function extractPdfText(buf: ArrayBuffer): Promise<string> {
+  // Try pdf-parse first (fast, bundled, works for text-based PDFs)
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const pdfParse = require("pdf-parse/lib/pdf-parse.js") as (
@@ -829,11 +830,47 @@ export async function extractPdfText(buf: ArrayBuffer): Promise<string> {
       options?: { max?: number },
     ) => Promise<{ text: string; numpages: number }>;
     const data = await pdfParse(Buffer.from(buf));
-    return data.text ?? "";
+    const text = data.text ?? "";
+    if (text.trim().length > 100) return text;
+    console.log(`[extractPdfText] pdf-parse returned ${text.trim().length} chars — falling back to Claude document API`);
   } catch (err) {
     console.error("[extractPdfText] pdf-parse failed:", err instanceof Error ? err.message : String(err));
-    return "";
   }
+
+  // Fallback: send PDF to Claude's native document API (handles scanned PDFs too)
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const Anthropic = require("@anthropic-ai/sdk");
+    const client = new Anthropic.default({
+      apiKey: process.env.ANTHROPIC_API_KEY,
+    });
+    const base64 = Buffer.from(buf).toString("base64");
+    const response = await client.messages.create({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 4096,
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "document",
+              source: { type: "base64", media_type: "application/pdf", data: base64 },
+            },
+            {
+              type: "text",
+              text: "Extract and return ALL text from this document verbatim, preserving structure. Output only the extracted text, no commentary.",
+            },
+          ],
+        },
+      ],
+    });
+    const block = response.content[0];
+    if (block?.type === "text") return block.text;
+  } catch (err) {
+    console.error("[extractPdfText] Claude document API failed:", err instanceof Error ? err.message : String(err));
+  }
+
+  return "";
 }
 
 export async function generateDocx(
