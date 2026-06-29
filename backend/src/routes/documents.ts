@@ -181,7 +181,15 @@ documentsRouter.get("/:documentId/display", requireAuth, async (req, res) => {
   if (!active)
     return void res.status(404).json({ detail: "No file available" });
 
-  const fileType = active.file_type ?? "";
+  const inferredType = active.file_type ?? (
+    active.filename?.toLowerCase().endsWith(".pdf") ? "pdf" :
+    active.filename?.toLowerCase().endsWith(".docx") ? "docx" :
+    active.filename?.toLowerCase().endsWith(".doc") ? "doc" :
+    active.storage_path?.toLowerCase().endsWith(".pdf") ? "pdf" :
+    active.storage_path?.toLowerCase().endsWith(".docx") ? "docx" :
+    active.storage_path?.toLowerCase().endsWith(".doc") ? "doc" : ""
+  );
+  const fileType = inferredType;
   const isDocx = fileType === "docx" || fileType === "doc";
   const displayFilename = downloadFilenameForVersion(
     active.filename,
