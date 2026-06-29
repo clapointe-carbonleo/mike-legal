@@ -6,6 +6,7 @@ import {
   downloadFile,
   deleteFile,
   getSignedUrl,
+  getUploadSignedUrl,
   storageKey,
   uploadFile,
   versionStorageKey,
@@ -82,6 +83,58 @@ documentsRouter.post(
     await handleDocumentUpload(req, res, userId, null, db);
   },
 );
+
+// POST /single-documents/upload-url — presigned PUT URL for direct-to-R2 upload
+documentsRouter.post("/upload-url", requireAuth, async (req, res) => {
+  const userId = res.locals.userId as string;
+  const { filename, project_id } = req.body as { filename?: string; project_id?: string };
+  if (!filename) return void res.status(400).json({ detail: "filename is required" });
+  const suffix = filename.includes(".") ? filename.split(".").pop()!.toLowerCase() : "";
+  if (!ALLOWED_TYPES.has(suffix))
+    return void res.status(400).json({ detail: `Unsupported file type: ${suffix}. Allowed: pdf, docx, doc` });
+  const contentType = suffix === "pdf"
+    ? "application/pdf"
+    : "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  const db = createServerSupabase();
+  const { data: doc, error } = await db
+    .from("documents")
+    .insert({ project_id: project_id || null, user_id: userId, status: "processing", filename, file_type: suffix })
+    .select("id")
+    .single();
+  if (error || !doc) return void res.status(500).json({ detail: "Failed to create document record" });
+  const key = storageKey(userId, doc.id as string, filename);
+  const upload_url = await getUploadSignedUrl(key, contentType);
+  if (!upload_url) return void res.status(500).json({ detail: "Storage not configured" });
+  res.json({ doc_id: doc.id, upload_url, storage_key: key, content_type: contentType });
+});
+
+// POST /single-documents/:documentId/finalize-upload — called after direct R2 PUT
+documentsRouter.post("/:documentId/finalize-upload", requireAuth, async (req, res) => {
+  const userId = res.locals.userId as string;
+  const { documentId } = req.params;
+  const db = createServerSupabase();
+  const { data: doc, error } = await db
+    .from("documents")
+    .select("id, filename, file_type, project_id, user_id")
+    .eq("id", documentId)
+    .eq("user_id", userId)
+    .eq("status", "processing")
+    .single();
+  if (error || !doc) return void res.status(404).json({ detail: "Document not found" });
+  const filename = (doc.filename as string) || "document";
+  const suffix = (doc.file_type as string) || "pdf";
+  const key = storageKey(userId, documentId, filename);
+  const pdfStoragePath = suffix === "pdf" ? key : null;
+  const { data: versionRow, error: verErr } = await db
+    .from("document_versions")
+    .insert({ document_id: documentId, storage_path: key, pdf_storage_path: pdfStoragePath, source: "upload", version_number: 1, filename, file_type: suffix })
+    .select("id")
+    .single();
+  if (verErr || !versionRow) return void res.status(500).json({ detail: "Failed to create version record" });
+  await db.from("documents").update({ current_version_id: versionRow.id, status: "ready" }).eq("id", documentId);
+  const { data: result } = await db.from("documents").select("*").eq("id", documentId).single();
+  res.json(result);
+});
 
 // DELETE /single-documents/:documentId
 documentsRouter.delete("/:documentId", requireAuth, async (req, res) => {

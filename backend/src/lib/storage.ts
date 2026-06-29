@@ -128,6 +128,21 @@ export async function deleteFile(key: string): Promise<void> {
 // Signed URL (pre-signed for temporary direct access)
 // ---------------------------------------------------------------------------
 
+export async function getUploadSignedUrl(
+  key: string,
+  contentType: string,
+  expiresIn = 600,
+): Promise<string | null> {
+  if (!storageEnabled) return null;
+  try {
+    const client = getClient();
+    const command = new PutObjectCommand({ Bucket: BUCKET, Key: key, ContentType: contentType });
+    return await awsGetSignedUrl(client, command as any, { expiresIn });
+  } catch {
+    return null;
+  }
+}
+
 export async function getSignedUrl(
   key: string,
   expiresIn = 3600,
