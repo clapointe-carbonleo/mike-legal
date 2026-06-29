@@ -824,12 +824,10 @@ export function buildMessages(
 
 export async function extractPdfText(buf: ArrayBuffer): Promise<string> {
   try {
-    // Use the bundled pdfjs directly with a static path so esbuild/ncc can
-    // include it — pdf-parse's dynamic require(`./pdf.js/${version}/...`)
-    // is not statically analysable by bundlers.
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const pdfjsLib = require("pdf-parse/lib/pdf.js/v1.10.100/build/pdf.js") as {
-      getDocument: (opts: { data: Uint8Array; disableWorker: boolean }) => {
+    const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs" as string);
+    const lib = pdfjsLib as unknown as {
+      GlobalWorkerOptions: { workerSrc: string };
+      getDocument: (opts: unknown) => {
         promise: Promise<{
           numPages: number;
           getPage: (n: number) => Promise<{
@@ -837,22 +835,26 @@ export async function extractPdfText(buf: ArrayBuffer): Promise<string> {
           }>;
         }>;
       };
-      disableWorker: boolean;
     };
-    pdfjsLib.disableWorker = true;
-    const pdf = await pdfjsLib.getDocument({
+    // Resolve worker path at runtime so Vercel can include it via includeFiles
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const pkgDir = require("path").dirname(require.resolve("pdfjs-dist/package.json"));
+    lib.GlobalWorkerOptions.workerSrc = require("path").join(pkgDir, "legacy/build/pdf.worker.mjs");
+    const pdf = await lib.getDocument({
       data: new Uint8Array(buf),
-      disableWorker: true,
+      disableFontFace: true,
+      useSystemFonts: true,
+      verbosity: 0,
     }).promise;
     const parts: string[] = [];
     for (let i = 1; i <= pdf.numPages; i++) {
       const page = await pdf.getPage(i);
       const textContent = await page.getTextContent();
-      parts.push(textContent.items.map((it) => it.str ?? "").join(" "));
+      parts.push(textContent.items.map((it: { str?: string }) => it.str ?? "").join(" "));
     }
     return parts.join("\n\n");
   } catch (err) {
-    console.error("[extractPdfText] pdfjs v1 failed:", err instanceof Error ? err.message : String(err));
+    console.error("[extractPdfText] pdfjs failed:", err instanceof Error ? err.message : String(err));
     return "";
   }
 }
