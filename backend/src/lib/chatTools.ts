@@ -823,28 +823,12 @@ export function buildMessages(
 }
 
 export async function extractPdfText(buf: ArrayBuffer): Promise<string> {
-  // Try pdf-parse first (fast, bundled, works for text-based PDFs)
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const pdfParse = require("pdf-parse/lib/pdf-parse.js") as (
-      buffer: Buffer,
-      options?: { max?: number },
-    ) => Promise<{ text: string; numpages: number }>;
-    const data = await pdfParse(Buffer.from(buf));
-    const text = data.text ?? "";
-    if (text.trim().length > 100) return text;
-    console.log(`[extractPdfText] pdf-parse returned ${text.trim().length} chars — falling back to Claude document API`);
-  } catch (err) {
-    console.error("[extractPdfText] pdf-parse failed:", err instanceof Error ? err.message : String(err));
-  }
-
-  // Fallback: send PDF to Claude's native document API (handles scanned PDFs too)
   try {
     const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
     const base64 = Buffer.from(buf).toString("base64");
     const response = await client.messages.create({
       model: "claude-haiku-4-5-20251001",
-      max_tokens: 4096,
+      max_tokens: 8192,
       messages: [
         {
           role: "user",
@@ -855,18 +839,20 @@ export async function extractPdfText(buf: ArrayBuffer): Promise<string> {
             },
             {
               type: "text",
-              text: "Extract and return ALL text from this document verbatim, preserving structure. Output only the extracted text, no commentary.",
+              text: "Extract and return ALL text from this document verbatim, preserving structure (headings, paragraphs, lists, tables). Output only the extracted text, no commentary or explanation.",
             },
           ],
         },
       ],
     });
     const block = response.content[0];
-    if (block?.type === "text") return block.text;
+    if (block?.type === "text") {
+      console.log(`[extractPdfText] Claude extracted ${block.text.length} chars`);
+      return block.text;
+    }
   } catch (err) {
     console.error("[extractPdfText] Claude document API failed:", err instanceof Error ? err.message : String(err));
   }
-
   return "";
 }
 
