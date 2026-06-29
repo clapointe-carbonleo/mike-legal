@@ -824,7 +824,8 @@ export function buildMessages(
 
 export async function extractPdfText(buf: ArrayBuffer): Promise<string> {
   try {
-    const pdfParse = (await import("pdf-parse")).default;
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const pdfParse = require("pdf-parse") as (b: Buffer) => Promise<{ text: string }>;
     const data = await pdfParse(Buffer.from(buf));
     return data.text ?? "";
   } catch (err) {
