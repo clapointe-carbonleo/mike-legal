@@ -838,16 +838,15 @@ export async function extractPdfText(buf: ArrayBuffer): Promise<string> {
     console.error("[extractPdfText] pdf-parse error:", parseErr instanceof Error ? parseErr.message : String(parseErr));
   }
 
-  // Fallback: Claude beta API for scanned/image PDFs
+  // Fallback: Claude standard API (SDK 0.90+ has DocumentBlockParam natively, no beta flag needed)
   try {
     const apiKey = process.env.ANTHROPIC_API_KEY;
     console.log(`[extractPdfText] Claude fallback, key=${apiKey ? "set" : "MISSING"}`);
     const client = new Anthropic({ apiKey });
     const base64 = Buffer.from(buf).toString("base64");
-    const response = await client.beta.messages.create({
+    const response = await client.messages.create({
       model: "claude-haiku-4-5-20251001",
       max_tokens: 8192,
-      betas: ["pdfs-2024-09-25"],
       messages: [
         {
           role: "user",
@@ -855,7 +854,7 @@ export async function extractPdfText(buf: ArrayBuffer): Promise<string> {
             {
               type: "document",
               source: { type: "base64", media_type: "application/pdf", data: base64 },
-            },
+            } as Anthropic.DocumentBlockParam,
             {
               type: "text",
               text: "Extract and return ALL text from this document verbatim, preserving structure. Output only the extracted text, no commentary.",
@@ -869,12 +868,12 @@ export async function extractPdfText(buf: ArrayBuffer): Promise<string> {
       console.log(`[extractPdfText] Claude extracted ${block.text.length} chars`);
       return block.text;
     }
-    const debugMsg = `[PDF_DEBUG: Claude beta returned unexpected block type "${block?.type}"]`;
+    const debugMsg = `[PDF_DEBUG: Claude returned unexpected block type "${block?.type}"]`;
     console.log(debugMsg);
     return debugMsg;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error("[extractPdfText] Claude beta failed:", msg);
+    console.error("[extractPdfText] Claude failed:", msg);
     return `[PDF_DEBUG: ${msg}]`;
   }
 }
