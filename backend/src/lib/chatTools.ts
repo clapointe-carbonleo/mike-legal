@@ -824,15 +824,35 @@ export function buildMessages(
 
 export async function extractPdfText(buf: ArrayBuffer): Promise<string> {
   try {
+    // Use the bundled pdfjs directly with a static path so esbuild/ncc can
+    // include it — pdf-parse's dynamic require(`./pdf.js/${version}/...`)
+    // is not statically analysable by bundlers.
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const pdfParse = require("pdf-parse/lib/pdf-parse.js") as (
-      buffer: Buffer,
-      options?: { max?: number },
-    ) => Promise<{ text: string; numpages: number }>;
-    const data = await pdfParse(Buffer.from(buf));
-    return data.text ?? "";
+    const pdfjsLib = require("pdf-parse/lib/pdf.js/v1.10.100/build/pdf.js") as {
+      getDocument: (opts: { data: Uint8Array; disableWorker: boolean }) => {
+        promise: Promise<{
+          numPages: number;
+          getPage: (n: number) => Promise<{
+            getTextContent: () => Promise<{ items: { str?: string }[] }>;
+          }>;
+        }>;
+      };
+      disableWorker: boolean;
+    };
+    pdfjsLib.disableWorker = true;
+    const pdf = await pdfjsLib.getDocument({
+      data: new Uint8Array(buf),
+      disableWorker: true,
+    }).promise;
+    const parts: string[] = [];
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const textContent = await page.getTextContent();
+      parts.push(textContent.items.map((it) => it.str ?? "").join(" "));
+    }
+    return parts.join("\n\n");
   } catch (err) {
-    console.error("[extractPdfText] pdf-parse failed:", err instanceof Error ? err.message : String(err));
+    console.error("[extractPdfText] pdfjs v1 failed:", err instanceof Error ? err.message : String(err));
     return "";
   }
 }
