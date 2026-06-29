@@ -852,17 +852,20 @@ export async function extractPdfText(buf: ArrayBuffer): Promise<string> {
       standardFontDataUrl: STANDARD_FONT_DATA_URL,
     }).promise;
     const parts: string[] = [];
+    let hasContent = false;
     for (let i = 1; i <= pdf.numPages; i++) {
       const page = await pdf.getPage(i);
       const textContent = await page.getTextContent();
-      parts.push(`[Page ${i}]\n${textContent.items.map((it) => it.str ?? "").join(" ")}`);
+      const pageText = textContent.items.map((it) => it.str ?? "").join(" ");
+      if (pageText.trim()) hasContent = true;
+      parts.push(`[Page ${i}]\n${pageText}`);
     }
-    const text = parts.join("\n\n");
-    if (text.trim()) {
+    if (hasContent) {
+      const text = parts.join("\n\n");
       console.log(`[extractPdfText] pdfjs extracted ${text.length} chars`);
       return text;
     }
-    console.log("[extractPdfText] pdfjs returned empty, trying pdf-parse");
+    console.log("[extractPdfText] pdfjs returned empty (scanned PDF?), trying pdf-parse");
   } catch (pdfjsErr) {
     console.error("[extractPdfText] pdfjs error:", pdfjsErr instanceof Error ? pdfjsErr.message : String(pdfjsErr));
   }
@@ -908,11 +911,11 @@ export async function extractPdfText(buf: ArrayBuffer): Promise<string> {
       ],
     });
     const block = response.content[0];
-    if (block?.type === "text") {
+    if (block?.type === "text" && block.text.trim()) {
       console.log(`[extractPdfText] Claude extracted ${block.text.length} chars`);
       return block.text;
     }
-    const debugMsg = `[PDF_DEBUG: Claude returned unexpected block type "${block?.type}"]`;
+    const debugMsg = `[PDF_DEBUG: Claude returned ${block?.type === "text" ? "empty text" : `unexpected block type "${block?.type}"`}]`;
     console.log(debugMsg);
     return debugMsg;
   } catch (err) {
