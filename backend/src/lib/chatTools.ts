@@ -823,8 +823,26 @@ export function buildMessages(
 }
 
 export async function extractPdfText(buf: ArrayBuffer): Promise<string> {
+  // Try pdf-parse first — ncc-bundled, works in Vercel, handles text-based PDFs
   try {
-    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    const pdfParse = require("pdf-parse/lib/pdf-parse.js") as (
+      buffer: Buffer,
+    ) => Promise<{ text: string }>;
+    const data = await pdfParse(Buffer.from(buf));
+    if (data.text?.trim()) {
+      console.log(`[extractPdfText] pdf-parse got ${data.text.length} chars`);
+      return data.text;
+    }
+    console.log("[extractPdfText] pdf-parse returned empty, trying Claude API");
+  } catch (parseErr) {
+    console.error("[extractPdfText] pdf-parse error:", parseErr instanceof Error ? parseErr.message : String(parseErr));
+  }
+
+  // Fallback: Claude beta API for scanned/image PDFs
+  try {
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    console.log(`[extractPdfText] Claude fallback, key=${apiKey ? "set" : "MISSING"}`);
+    const client = new Anthropic({ apiKey });
     const base64 = Buffer.from(buf).toString("base64");
     const response = await client.beta.messages.create({
       model: "claude-haiku-4-5-20251001",
@@ -851,10 +869,13 @@ export async function extractPdfText(buf: ArrayBuffer): Promise<string> {
       console.log(`[extractPdfText] Claude extracted ${block.text.length} chars`);
       return block.text;
     }
-    return "";
+    const debugMsg = `[PDF_DEBUG: Claude beta returned unexpected block type "${block?.type}"]`;
+    console.log(debugMsg);
+    return debugMsg;
   } catch (err) {
-    console.error("[extractPdfText] Claude beta failed:", err instanceof Error ? err.message : String(err));
-    return "";
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("[extractPdfText] Claude beta failed:", msg);
+    return `[PDF_DEBUG: ${msg}]`;
   }
 }
 
