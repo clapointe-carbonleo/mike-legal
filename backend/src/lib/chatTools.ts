@@ -1,3 +1,4 @@
+import Anthropic from "@anthropic-ai/sdk";
 import {
   downloadFile,
   generatedDocKey,
@@ -839,11 +840,7 @@ export async function extractPdfText(buf: ArrayBuffer): Promise<string> {
 
   // Fallback: send PDF to Claude's native document API (handles scanned PDFs too)
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const Anthropic = require("@anthropic-ai/sdk");
-    const client = new Anthropic.default({
-      apiKey: process.env.ANTHROPIC_API_KEY,
-    });
+    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
     const base64 = Buffer.from(buf).toString("base64");
     const response = await client.messages.create({
       model: "claude-haiku-4-5-20251001",
