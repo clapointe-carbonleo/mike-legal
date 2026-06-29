@@ -1757,14 +1757,17 @@ async function readDocumentContent(
       );
     }
     let text: string;
-    console.log(`[read_document] file_type="${docInfo.file_type}" filename="${docInfo.filename}" bytes=${raw.byteLength}`);
-    if (docInfo.file_type === "pdf") {
+    const magic4 = Buffer.from(raw).subarray(0, 4).toString("binary");
+    const isPdf = docInfo.file_type === "pdf" || magic4 === "%PDF";
+    const isDocx = !isPdf && (docInfo.file_type === "docx" || magic4 === "PK\x03\x04");
+    console.log(`[read_document] file_type="${docInfo.file_type}" isPdf=${isPdf} isDocx=${isDocx} filename="${docInfo.filename}" bytes=${raw.byteLength}`);
+    if (isPdf) {
       text = await extractPdfText(raw);
       console.log(`[read_document] pdf extracted length=${text.length} filename="${docInfo.filename}"`);
       if (!text) {
         text = `[PDF text extraction returned empty for "${docInfo.filename}". The PDF may use image-based pages or unsupported encoding. Raw byte length: ${raw.byteLength}]`;
       }
-    } else if (docInfo.file_type === "docx") {
+    } else if (isDocx) {
       // Use the same flattening as the edit_document matcher so the
       // LLM sees exactly the characters it can anchor against.
       text = await extractDocxBodyText(Buffer.from(raw));
