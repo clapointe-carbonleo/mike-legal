@@ -39,7 +39,7 @@ export default function LoginPage() {
                         <span className="font-light">CARBON</span>
                         <span className="font-bold">LEO</span>
                     </span>
-                    <p className="text-white/40 text-sm mt-1 tracking-wide">Mike Legal</p>
+                    <p className="text-white/40 text-sm mt-1 tracking-wide">Mike-Legal</p>
                 </div>
 
                 <button

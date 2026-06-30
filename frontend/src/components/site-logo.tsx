@@ -33,7 +33,7 @@ export function SiteLogo({
         >
             <span className={`${sizeMap[size].text} leading-none`}>
                 <span className="font-light">Mike</span>
-                <span className="font-black"> Legal</span>
+                <span className="font-black">-Legal</span>
             </span>
             <span className={`${sizeMap[size].sub} uppercase tracking-[0.14em] text-current opacity-40 font-medium`}>
                 AI Platform
