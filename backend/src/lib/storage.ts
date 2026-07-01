@@ -14,6 +14,7 @@ import {
   PutObjectCommand,
   DeleteObjectCommand,
   ListObjectsV2Command,
+  HeadObjectCommand,
 } from "@aws-sdk/client-s3";
 import * as S3Commands from "@aws-sdk/client-s3";
 import { getSignedUrl as awsGetSignedUrl } from "@aws-sdk/s3-request-presigner";
@@ -90,6 +91,17 @@ export async function downloadFile(key: string): Promise<ArrayBuffer | null> {
     return bytes.buffer as ArrayBuffer;
   } catch {
     return null;
+  }
+}
+
+export async function fileExists(key: string): Promise<boolean> {
+  if (!storageEnabled) return false;
+  try {
+    const client = getClient();
+    await client.send(new HeadObjectCommand({ Bucket: BUCKET, Key: key }));
+    return true;
+  } catch {
+    return false;
   }
 }
 

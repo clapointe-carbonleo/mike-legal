@@ -5,6 +5,7 @@ import {
   buildContentDisposition,
   downloadFile,
   deleteFile,
+  fileExists,
   getSignedUrl,
   getUploadSignedUrl,
   storageKey,
@@ -124,6 +125,9 @@ documentsRouter.post("/:documentId/finalize-upload", requireAuth, async (req, re
   const filename = (doc.filename as string) || "document";
   const suffix = (doc.file_type as string) || "pdf";
   const key = storageKey(userId, documentId, filename);
+  const uploaded = await fileExists(key);
+  if (!uploaded)
+    return void res.status(422).json({ detail: "File not found in storage. Upload the file before calling finalize." });
   const pdfStoragePath = suffix === "pdf" ? key : null;
   const { data: versionRow, error: verErr } = await db
     .from("document_versions")

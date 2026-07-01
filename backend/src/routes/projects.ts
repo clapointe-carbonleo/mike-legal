@@ -214,7 +214,11 @@ projectsRouter.get("/:projectId", requireAuth, async (req, res) => {
     project.user_id === userId ||
     (userEmail &&
       Array.isArray(project.shared_with) &&
-      project.shared_with.includes(userEmail));
+      project.shared_with.some(
+        (e: unknown) =>
+          typeof e === "string" &&
+          e.toLowerCase() === userEmail.toLowerCase(),
+      ));
   if (!canAccess)
     return void res.status(404).json({ detail: "Project not found" });
 

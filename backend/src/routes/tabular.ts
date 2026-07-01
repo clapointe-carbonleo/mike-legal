@@ -585,6 +585,13 @@ tabularRouter.delete("/:reviewId", requireAuth, async (req, res) => {
     const userId = res.locals.userId as string;
     const { reviewId } = req.params;
     const db = createServerSupabase();
+    const { data: existing, error: fetchErr } = await db
+        .from("tabular_reviews")
+        .select("id")
+        .eq("id", reviewId)
+        .eq("user_id", userId)
+        .single();
+    if (fetchErr || !existing) return void res.status(404).json({ detail: "Tabular review not found" });
     const { error } = await db
         .from("tabular_reviews")
         .delete()
