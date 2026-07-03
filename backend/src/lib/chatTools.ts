@@ -1340,7 +1340,7 @@ export async function generateDocx(
     const docId = crypto.randomUUID().replace(/-/g, "");
     const safeTitle =
       title
-        .replace(/[^a-zA-Z0-9 -]/g, "")
+        .replace(/[\\/:*?"<>|]/g, "")
         .trim()
         .slice(0, 64) || "document";
     const filename = `${safeTitle}.docx`;
@@ -3592,7 +3592,7 @@ export async function runToolCalls(
       );
       const previewFilename = `${
         title
-          .replace(/[^a-zA-Z0-9 _-]/g, "")
+          .replace(/[\\/:*?"<>|]/g, "")
           .trim()
           .slice(0, 64) || "document"
       }.docx`;
@@ -3606,6 +3606,8 @@ export async function runToolCalls(
         db,
         { landscape, projectId: projectId ?? null },
       );
+      console.log("[generate_docx] result keys:", Object.keys(result));
+      if ("error" in result) console.error("[generate_docx] error:", result.error);
       let newDocLabel: string | null = null;
       if ("filename" in result && "download_url" in result) {
         const dlFilename = result.filename as string;
@@ -3655,6 +3657,7 @@ export async function runToolCalls(
           version_number: versionNumber,
         });
       } else {
+        console.error("[generate_docx] failed:", JSON.stringify(result));
         write(
           `data: ${JSON.stringify({ type: "doc_created", filename: previewFilename, download_url: "" })}\n\n`,
         );
