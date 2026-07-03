@@ -1368,6 +1368,7 @@ export async function generateDocx(
       .select("id")
       .single();
     if (docErr || !docRow) {
+      console.error("[generateDocx] documents insert error:", docErr);
       return {
         error: `Failed to record generated document: ${docErr?.message ?? "unknown"}`,
       };
@@ -1389,6 +1390,7 @@ export async function generateDocx(
       .select("id")
       .single();
     if (verErr || !versionRow) {
+      console.error("[generateDocx] document_versions insert error:", verErr);
       return {
         error: `Failed to record generated document version: ${verErr?.message ?? "unknown"}`,
       };
@@ -1412,6 +1414,7 @@ export async function generateDocx(
       message: `Document '${filename}' has been generated successfully.`,
     };
   } catch (e) {
+    console.error("[generateDocx] exception:", e);
     return { error: String(e) };
   }
 }
