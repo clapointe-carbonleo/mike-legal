@@ -19,6 +19,7 @@ create table if not exists public.user_profiles (
   credits_reset_date timestamptz not null default (now() + interval '30 days'),
   title_model text,
   tabular_model text not null default 'gemini-3-flash-preview',
+  main_model text,
   quote_model text,
   mfa_on_login boolean not null default false,
   legal_research_us boolean not null default true,

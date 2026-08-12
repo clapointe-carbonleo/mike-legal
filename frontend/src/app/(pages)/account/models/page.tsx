@@ -27,7 +27,7 @@ import {
 } from "../accountStyles";
 import { AccountSection } from "../AccountSection";
 
-type ModelPreferenceField = "titleModel" | "tabularModel";
+type ModelPreferenceField = "mainModel" | "titleModel" | "tabularModel";
 
 export default function ModelPreferencesPage() {
     const { profile, updateModelPreference } = useUserProfile();
@@ -58,6 +58,11 @@ export default function ModelPreferencesPage() {
         const ok = await updateModelPreference(field, id);
         setSavingField((current) => (current === field ? null : current));
         if (ok) {
+            setOptimisticValues((current) => {
+                const next = { ...current };
+                delete next[field];
+                return next;
+            });
             setSavedField(field);
             if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
             savedTimerRef.current = setTimeout(() => {
@@ -80,6 +85,28 @@ export default function ModelPreferencesPage() {
                 </h2>
             </div>
             <AccountSection>
+                <div className="px-4 py-5">
+                    <label className="text-sm font-medium text-gray-700 block mb-2">
+                        Default assistant model
+                    </label>
+                    <p className="text-xs text-gray-400 mb-2">
+                        Used by the main assistant model selector when you start
+                        a chat.
+                    </p>
+                    <ModelPreferenceDropdown
+                        value={
+                            optimisticValues.mainModel ??
+                            profile?.mainModel ??
+                            "claude-sonnet-4-6"
+                        }
+                        options={MODELS}
+                        apiKeys={profile?.apiKeys}
+                        isSaving={savingField === "mainModel"}
+                        isSaved={savedField === "mainModel"}
+                        onChange={(id) => handleModelChange("mainModel", id)}
+                    />
+                </div>
+                <div className="mx-4 h-px bg-gray-200" />
                 <div className="px-4 py-5">
                     <label className="text-sm font-medium text-gray-700 block mb-2">
                         Title generation model

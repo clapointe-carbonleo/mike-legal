@@ -3,10 +3,12 @@ import { Router } from "express";
 import { requireAuth, requireMfaIfEnrolled } from "../middleware/auth";
 import { createServerSupabase } from "../lib/supabase";
 import {
+    DEFAULT_MAIN_MODEL,
     DEFAULT_TABULAR_MODEL,
     DEFAULT_TITLE_MODEL,
     CLAUDE_LOW_MODELS,
     OPENAI_LOW_MODELS,
+    resolveMainModel,
     resolveModel,
 } from "../lib/llm";
 import {
@@ -53,6 +55,7 @@ type UserProfileRow = {
     tier: string;
     title_model: string | null;
     tabular_model: string;
+    main_model: string | null;
     mfa_on_login: boolean | null;
     legal_research_us: boolean | null;
 };
@@ -160,12 +163,18 @@ function mcpOAuthPopupCsp(nonce: string) {
 }
 
 const PROFILE_SELECT =
+    "display_name, organisation, message_credits_used, credits_reset_date, tier, title_model, tabular_model, main_model, mfa_on_login, legal_research_us";
+const PROFILE_SELECT_NO_MAIN =
     "display_name, organisation, message_credits_used, credits_reset_date, tier, title_model, tabular_model, mfa_on_login, legal_research_us";
 const PROFILE_SELECT_NO_LEGAL =
+    "display_name, organisation, message_credits_used, credits_reset_date, tier, title_model, tabular_model, main_model, mfa_on_login";
+const PROFILE_SELECT_NO_LEGAL_NO_MAIN =
     "display_name, organisation, message_credits_used, credits_reset_date, tier, title_model, tabular_model, mfa_on_login";
 const LEGACY_PROFILE_SELECT =
     "display_name, organisation, message_credits_used, credits_reset_date, tier, tabular_model";
 const LEGACY_PROFILE_MODEL_SELECT =
+    "display_name, organisation, message_credits_used, credits_reset_date, tier, title_model, tabular_model, main_model";
+const LEGACY_PROFILE_MODEL_SELECT_NO_MAIN =
     "display_name, organisation, message_credits_used, credits_reset_date, tier, title_model, tabular_model";
 
 function isMissingProfileColumn(error: unknown, column: string): boolean {
@@ -186,19 +195,21 @@ async function selectProfile(
     userId: string,
     mode: "maybe" | "single",
 ) {
-    const fullQuery = db
-        .from("user_profiles")
-        .select(PROFILE_SELECT)
-        .eq("user_id", userId);
-    const full =
-        mode === "single"
-            ? await fullQuery.single()
-            : await fullQuery.maybeSingle();
+    const full = await selectWithOptionalMainModel(
+        db,
+        userId,
+        mode,
+        PROFILE_SELECT,
+        PROFILE_SELECT_NO_MAIN,
+    );
     if (!full.error) return full;
 
     const legacy = await selectProfileLegacy(db, userId, mode);
     if (legacy.data && typeof legacy.data === "object") {
         const row = legacy.data as Record<string, unknown>;
+        if (!("main_model" in row)) {
+            Object.assign(row, { main_model: null });
+        }
         if (!("legal_research_us" in row)) {
             Object.assign(row, { legal_research_us: true });
         }
@@ -206,17 +217,50 @@ async function selectProfile(
     return legacy;
 }
 
+async function selectWithOptionalMainModel(
+    db: ReturnType<typeof createServerSupabase>,
+    userId: string,
+    mode: "maybe" | "single",
+    selectWithMain: string,
+    selectWithoutMain: string,
+) {
+    const query = db
+        .from("user_profiles")
+        .select(selectWithMain)
+        .eq("user_id", userId);
+    const result =
+        mode === "single" ? await query.single() : await query.maybeSingle();
+    if (!result.error || !isMissingProfileColumn(result.error, "main_model")) {
+        return result;
+    }
+
+    const fallbackQuery = db
+        .from("user_profiles")
+        .select(selectWithoutMain)
+        .eq("user_id", userId);
+    const fallback =
+        mode === "single"
+            ? await fallbackQuery.single()
+            : await fallbackQuery.maybeSingle();
+    if (fallback.data && typeof fallback.data === "object") {
+        const row = fallback.data as Record<string, unknown>;
+        Object.assign(row, { main_model: null });
+    }
+    return fallback;
+}
+
 async function selectProfileLegacy(
     db: ReturnType<typeof createServerSupabase>,
     userId: string,
     mode: "maybe" | "single",
 ) {
-    const query = db
-        .from("user_profiles")
-        .select(PROFILE_SELECT_NO_LEGAL)
-        .eq("user_id", userId);
-    const result =
-        mode === "single" ? await query.single() : await query.maybeSingle();
+    const result = await selectWithOptionalMainModel(
+        db,
+        userId,
+        mode,
+        PROFILE_SELECT_NO_LEGAL,
+        PROFILE_SELECT_NO_LEGAL_NO_MAIN,
+    );
     if (!result.error) {
         return result;
     }
@@ -226,14 +270,13 @@ async function selectProfileLegacy(
         "mfa_on_login",
     );
     if (missingMfaOnLogin) {
-        const modelQuery = db
-            .from("user_profiles")
-            .select(LEGACY_PROFILE_MODEL_SELECT)
-            .eq("user_id", userId);
-        const modelLegacy =
-            mode === "single"
-                ? await modelQuery.single()
-                : await modelQuery.maybeSingle();
+        const modelLegacy = await selectWithOptionalMainModel(
+            db,
+            userId,
+            mode,
+            LEGACY_PROFILE_MODEL_SELECT,
+            LEGACY_PROFILE_MODEL_SELECT_NO_MAIN,
+        );
         if (
             !modelLegacy.error ||
             !isMissingProfileColumn(modelLegacy.error, "title_model")
@@ -267,6 +310,7 @@ async function selectProfileLegacy(
         const row = legacy.data as Record<string, unknown>;
         Object.assign(row, {
             title_model: null,
+            main_model: null,
             mfa_on_login: false,
         });
     }
@@ -289,6 +333,7 @@ function serializeProfile(row: UserProfileRow, apiKeyStatus?: ApiKeyStatus) {
         creditsResetDate: row.credits_reset_date,
         creditsRemaining: Math.max(MONTHLY_CREDIT_LIMIT - creditsUsed, 0),
         tier: row.tier || "Free",
+        mainModel: resolveMainModel(row.main_model, DEFAULT_MAIN_MODEL),
         titleModel: resolveModel(row.title_model, titleFallback),
         tabularModel: resolveModel(row.tabular_model, DEFAULT_TABULAR_MODEL),
         mfaOnLogin: row.mfa_on_login === true,
@@ -303,6 +348,7 @@ function validateProfilePayload(body: unknown):
           update: {
               display_name?: string | null;
               organisation?: string | null;
+              main_model?: string;
               title_model?: string;
               tabular_model?: string;
               legal_research_us?: boolean;
@@ -318,6 +364,7 @@ function validateProfilePayload(body: unknown):
     const allowedFields = new Set([
         "displayName",
         "organisation",
+        "mainModel",
         "titleModel",
         "tabularModel",
         "legalResearchUs",
@@ -335,6 +382,7 @@ function validateProfilePayload(body: unknown):
     const update: {
         display_name?: string | null;
         organisation?: string | null;
+        main_model?: string;
         title_model?: string;
         tabular_model?: string;
         legal_research_us?: boolean;
@@ -370,6 +418,17 @@ function validateProfilePayload(body: unknown):
             return { ok: false, detail: "Unsupported tabularModel" };
         }
         update.tabular_model = resolved;
+    }
+
+    if ("mainModel" in raw) {
+        if (typeof raw.mainModel !== "string") {
+            return { ok: false, detail: "mainModel must be a string" };
+        }
+        const resolved = resolveMainModel(raw.mainModel, null);
+        if (!resolved) {
+            return { ok: false, detail: "Unsupported mainModel" };
+        }
+        update.main_model = resolved;
     }
 
     if ("titleModel" in raw) {

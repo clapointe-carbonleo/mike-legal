@@ -16,6 +16,11 @@ export const GEMINI_MAIN_MODELS = [
     "gemini-3-flash-preview",
 ] as const;
 export const OPENAI_MAIN_MODELS = ["gpt-5.5", "gpt-5.4"] as const;
+export const MAIN_MODEL_IDS = [
+    ...CLAUDE_MAIN_MODELS,
+    ...GEMINI_MAIN_MODELS,
+    ...OPENAI_MAIN_MODELS,
+] as const;
 
 // Mid-tier (used for tabular review) — user picks one in account settings.
 export const CLAUDE_MID_MODELS = ["claude-sonnet-4-6"] as const;
@@ -33,9 +38,7 @@ export const DEFAULT_TITLE_MODEL = "gemini-3.1-flash-lite-preview";
 export const DEFAULT_TABULAR_MODEL = "gemini-3-flash-preview";
 
 const ALL_MODELS = new Set<string>([
-    ...CLAUDE_MAIN_MODELS,
-    ...GEMINI_MAIN_MODELS,
-    ...OPENAI_MAIN_MODELS,
+    ...MAIN_MODEL_IDS,
     ...CLAUDE_MID_MODELS,
     ...GEMINI_MID_MODELS,
     ...OPENAI_MID_MODELS,
@@ -43,6 +46,7 @@ const ALL_MODELS = new Set<string>([
     ...GEMINI_LOW_MODELS,
     ...OPENAI_LOW_MODELS,
 ]);
+const MAIN_MODEL_ID_SET = new Set<string>(MAIN_MODEL_IDS);
 
 // ---------------------------------------------------------------------------
 // Provider inference
@@ -57,5 +61,13 @@ export function providerForModel(model: string): Provider {
 
 export function resolveModel(id: string | null | undefined, fallback: string): string {
     if (id && ALL_MODELS.has(id)) return id;
+    return fallback;
+}
+
+export function resolveMainModel(
+    id: string | null | undefined,
+    fallback: string | null = DEFAULT_MAIN_MODEL,
+): string | null {
+    if (id && MAIN_MODEL_ID_SET.has(id)) return id;
     return fallback;
 }

@@ -219,6 +219,7 @@ export interface UserProfile {
     creditsResetDate: string;
     creditsRemaining: number;
     tier: string;
+    mainModel: string;
     titleModel: string;
     tabularModel: string;
     mfaOnLogin: boolean;
@@ -230,13 +231,18 @@ export async function getUserProfile(): Promise<UserProfile> {
     return apiRequest<UserProfile>("/user/profile");
 }
 
-export async function updateUserProfile(payload: {
+export interface UpdateUserProfilePayload {
     displayName?: string | null;
     organisation?: string | null;
+    mainModel?: string;
     titleModel?: string;
     tabularModel?: string;
     legalResearchUs?: boolean;
-}): Promise<UserProfile> {
+}
+
+export async function updateUserProfile(
+    payload: UpdateUserProfilePayload,
+): Promise<UserProfile> {
     return apiRequest<UserProfile>("/user/profile", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
