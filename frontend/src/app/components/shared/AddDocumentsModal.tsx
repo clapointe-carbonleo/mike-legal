@@ -3,10 +3,12 @@
 import { useEffect, useRef, useState } from "react";
 import { AlertCircle, Upload, Search, Loader2, X } from "lucide-react";
 import {
-    uploadStandaloneDocument,
-    uploadProjectDocument,
     addDocumentToProject,
     deleteDocument,
+    reportDocumentBatchUploadFailures,
+    uploadDocumentsBatch,
+    uploadProjectDocument,
+    uploadStandaloneDocument,
 } from "@/app/lib/mikeApi";
 import type { Document } from "./types";
 import { FileDirectory } from "./FileDirectory";
@@ -188,7 +190,8 @@ export function AddDocumentsModal({
         const files = Array.from(e.target.files || []);
         if (!files.length) return;
         const { supported, unsupported } = partitionSupportedDocumentFiles(files);
-        setUploadWarning(formatUnsupportedDocumentWarning(unsupported));
+        const unsupportedWarning = formatUnsupportedDocumentWarning(unsupported);
+        setUploadWarning(unsupportedWarning);
         if (supported.length === 0) {
             if (fileInputRef.current) fileInputRef.current.value = "";
             return;
@@ -196,13 +199,27 @@ export function AddDocumentsModal({
         setUploadingFilenames(supported.map((file) => file.name));
         setUploading(true);
         try {
-            const uploaded = await Promise.all(
-                supported.map((f) =>
+            const { documents: uploaded, failures } = await uploadDocumentsBatch(
+                supported,
+                (f) =>
                     projectId
                         ? uploadProjectDocument(projectId, f)
                         : uploadStandaloneDocument(f),
-                ),
             );
+            reportDocumentBatchUploadFailures(
+                "Document picker upload",
+                failures,
+                supported.length,
+                { notifyUser: false },
+            );
+            if (failures.length > 0) {
+                const failureWarning = `${failures.length} of ${supported.length} files failed; successful uploads were kept.`;
+                setUploadWarning(
+                    unsupportedWarning
+                        ? `${unsupportedWarning} ${failureWarning}`
+                        : failureWarning,
+                );
+            }
             invalidateDirectoryCache();
             setExtraUploadedDocs((prev) => [...uploaded, ...prev]);
             uploaded.forEach((d) =>

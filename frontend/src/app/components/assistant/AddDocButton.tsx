@@ -8,7 +8,11 @@ import {
     DropdownMenuItem,
     DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { uploadStandaloneDocument } from "@/app/lib/mikeApi";
+import {
+    reportDocumentBatchUploadFailures,
+    uploadDocumentsBatch,
+    uploadStandaloneDocument,
+} from "@/app/lib/mikeApi";
 import type { Document } from "../shared/types";
 
 interface Props {
@@ -33,8 +37,14 @@ export function AddDocButton({
         if (!files.length) return;
         setUploading(true);
         try {
-            const uploaded = await Promise.all(
-                files.map((f) => uploadStandaloneDocument(f)),
+            const { documents: uploaded, failures } = await uploadDocumentsBatch(
+                files,
+                uploadStandaloneDocument,
+            );
+            reportDocumentBatchUploadFailures(
+                "Assistant document upload",
+                failures,
+                files.length,
             );
             uploaded.forEach((doc) => onSelectDoc(doc));
         } catch (err) {

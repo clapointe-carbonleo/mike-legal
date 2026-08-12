@@ -2,7 +2,12 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Check, Loader2, Search, Upload, X } from "lucide-react";
-import { getProject, uploadProjectDocument } from "@/app/lib/mikeApi";
+import {
+    getProject,
+    reportDocumentBatchUploadFailures,
+    uploadDocumentsBatch,
+    uploadProjectDocument,
+} from "@/app/lib/mikeApi";
 import type { Document } from "./types";
 import { DocFileIcon } from "./FileDirectory";
 import { VersionChip } from "./VersionChip";
@@ -98,8 +103,14 @@ export function AddProjectDocsModal({
         if (!files.length) return;
         setUploading(true);
         try {
-            const uploaded = await Promise.all(
-                files.map((f) => uploadProjectDocument(projectId, f)),
+            const { documents: uploaded, failures } = await uploadDocumentsBatch(
+                files,
+                (f) => uploadProjectDocument(projectId, f),
+            );
+            reportDocumentBatchUploadFailures(
+                "Project document picker upload",
+                failures,
+                files.length,
             );
             setDocs((prev) => [...uploaded, ...prev]);
             setSelectedIds((prev) => {

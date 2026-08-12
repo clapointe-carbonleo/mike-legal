@@ -658,19 +658,62 @@ interface UploadUrlResponse {
     content_type: string;
 }
 
+class DocumentUploadFinalizeError extends Error {
+    constructor(public readonly cause: unknown) {
+        super("Document upload finalization failed");
+        this.name = "DocumentUploadFinalizeError";
+    }
+}
+
 async function presignedUpload(file: File, projectId?: string): Promise<Document> {
     const meta = await apiRequest<UploadUrlResponse>("/single-documents/upload-url", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ filename: file.name, project_id: projectId }),
     });
-    const r2Res = await fetch(meta.upload_url, {
-        method: "PUT",
-        headers: { "Content-Type": meta.content_type },
-        body: file,
-    });
-    if (!r2Res.ok) throw new Error(`R2 upload failed: ${await r2Res.text()}`);
-    return apiRequest<Document>(`/single-documents/${meta.doc_id}/finalize-upload`, { method: "POST" });
+    try {
+        const r2Res = await fetch(meta.upload_url, {
+            method: "PUT",
+            headers: { "Content-Type": meta.content_type },
+            body: file,
+        });
+        if (!r2Res.ok) throw new Error(`R2 upload failed: ${await r2Res.text()}`);
+    } catch (error) {
+        await apiRequest<void>(
+            `/single-documents/${meta.doc_id}?filename=${encodeURIComponent(file.name)}`,
+            { method: "DELETE" },
+        ).catch((cleanupError) => {
+            console.warn("Failed to clean up incomplete document upload", {
+                documentId: meta.doc_id,
+                filename: file.name,
+                error: cleanupError,
+            });
+        });
+        throw error;
+    }
+
+    let finalizeError: unknown;
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+        try {
+            return await apiRequest<Document>(
+                `/single-documents/${meta.doc_id}/finalize-upload`,
+                {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        filename: file.name,
+                        size_bytes: file.size,
+                    }),
+                },
+            );
+        } catch (error) {
+            finalizeError = error;
+            if (attempt < 2) {
+                await new Promise((resolve) => setTimeout(resolve, 500));
+            }
+        }
+    }
+    throw new DocumentUploadFinalizeError(finalizeError);
 }
 
 export async function uploadProjectDocument(
@@ -684,6 +727,140 @@ export async function uploadStandaloneDocument(
     file: File,
 ): Promise<Document> {
     return presignedUpload(file);
+}
+
+const DEFAULT_DOCUMENT_UPLOAD_CONCURRENCY = 5;
+const DEFAULT_DOCUMENT_UPLOAD_ATTEMPTS = 2;
+const DEFAULT_DOCUMENT_UPLOAD_RETRY_DELAY_MS = 300;
+const MAX_DOCUMENT_UPLOAD_RETRY_DELAY_MS = 2_000;
+
+export type DocumentUploadResult =
+    | {
+          status: "fulfilled";
+          index: number;
+          file: File;
+          document: Document;
+      }
+    | {
+          status: "rejected";
+          index: number;
+          file: File;
+          error: unknown;
+      };
+
+export interface DocumentBatchUploadResult {
+    results: DocumentUploadResult[];
+    documents: Document[];
+    failures: Extract<DocumentUploadResult, { status: "rejected" }>[];
+}
+
+export async function uploadDocumentsBatch(
+    files: File[],
+    uploadDocument: (file: File) => Promise<Document>,
+    options?: {
+        concurrency?: number;
+        attempts?: number;
+        retryDelayMs?: number;
+    },
+): Promise<DocumentBatchUploadResult> {
+    const concurrency = Math.max(
+        1,
+        Math.floor(options?.concurrency ?? DEFAULT_DOCUMENT_UPLOAD_CONCURRENCY),
+    );
+    const attempts = Math.max(
+        1,
+        Math.floor(options?.attempts ?? DEFAULT_DOCUMENT_UPLOAD_ATTEMPTS),
+    );
+    const retryDelayMs = Math.max(
+        0,
+        Math.floor(options?.retryDelayMs ?? DEFAULT_DOCUMENT_UPLOAD_RETRY_DELAY_MS),
+    );
+    const results = new Array<DocumentUploadResult>(files.length);
+    let nextIndex = 0;
+
+    const sleep = (ms: number) =>
+        new Promise((resolve) => setTimeout(resolve, ms));
+
+    async function uploadWithRetry(file: File) {
+        let lastError: unknown;
+        for (let attempt = 1; attempt <= attempts; attempt += 1) {
+            try {
+                return await uploadDocument(file);
+            } catch (error) {
+                lastError = error;
+                if (error instanceof DocumentUploadFinalizeError) throw error;
+                if (attempt < attempts && retryDelayMs > 0) {
+                    await sleep(
+                        Math.min(
+                            retryDelayMs * 2 ** (attempt - 1),
+                            MAX_DOCUMENT_UPLOAD_RETRY_DELAY_MS,
+                        ),
+                    );
+                }
+            }
+        }
+        throw lastError;
+    }
+
+    async function worker() {
+        while (nextIndex < files.length) {
+            const index = nextIndex;
+            nextIndex += 1;
+            const file = files[index]!;
+            try {
+                const document = await uploadWithRetry(file);
+                results[index] = {
+                    status: "fulfilled",
+                    index,
+                    file,
+                    document,
+                };
+            } catch (error) {
+                results[index] = {
+                    status: "rejected",
+                    index,
+                    file,
+                    error,
+                };
+            }
+        }
+    }
+
+    await Promise.all(
+        Array.from({ length: Math.min(concurrency, files.length) }, () =>
+            worker(),
+        ),
+    );
+
+    const documents = results.flatMap((result) =>
+        result.status === "fulfilled" ? [result.document] : [],
+    );
+    const failures = results.filter(
+        (result): result is Extract<DocumentUploadResult, { status: "rejected" }> =>
+            result.status === "rejected",
+    );
+
+    return { results, documents, failures };
+}
+
+export function reportDocumentBatchUploadFailures(
+    context: string,
+    failures: DocumentBatchUploadResult["failures"],
+    totalFiles: number,
+    options?: { notifyUser?: boolean },
+) {
+    if (failures.length === 0) return;
+    const message = `${failures.length} of ${totalFiles} files failed; successful uploads were kept.`;
+    console.warn(
+        `${context}: ${message}`,
+        failures.map((failure) => ({
+            filename: failure.file.name,
+            error: failure.error,
+        })),
+    );
+    if (options?.notifyUser !== false && typeof window !== "undefined") {
+        window.alert(message);
+    }
 }
 
 export async function listStandaloneDocuments(): Promise<Document[]> {

@@ -23,7 +23,7 @@ import {
   attachLatestVersionNumbers,
   loadActiveVersion,
 } from "../lib/documentVersions";
-import { ensureDocAccess } from "../lib/access";
+import { checkProjectAccess, ensureDocAccess } from "../lib/access";
 import { singleFileUpload } from "../lib/upload";
 
 export const documentsRouter = Router();
@@ -32,6 +32,38 @@ const isDev = process.env.NODE_ENV !== "production";
 const devLog = (...args: Parameters<typeof console.log>) => {
   if (isDev) console.log(...args);
 };
+
+function parseUploadFilename(value: unknown):
+  | { ok: true; filename: string; suffix: string; contentType: string }
+  | { ok: false; detail: string } {
+  if (typeof value !== "string" || !value.trim()) {
+    return { ok: false, detail: "filename is required" };
+  }
+  const rawFilename = value.trim().replace(/[\\/]/g, "_");
+  const suffix = rawFilename.includes(".")
+    ? rawFilename.split(".").pop()!.toLowerCase()
+    : "";
+  if (!ALLOWED_TYPES.has(suffix)) {
+    return {
+      ok: false,
+      detail: `Unsupported file type: ${suffix}. Allowed: pdf, docx, doc`,
+    };
+  }
+  const extension = `.${suffix}`;
+  const stem = rawFilename.slice(0, -extension.length).trim() || "document";
+  const filename = `${stem.slice(0, 200 - extension.length)}${extension}`;
+  return {
+    ok: true,
+    filename,
+    suffix,
+    contentType:
+      suffix === "pdf"
+        ? "application/pdf"
+        : suffix === "doc"
+          ? "application/msword"
+          : "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  };
+}
 
 async function deleteDocumentAndVersionFiles(
   db: ReturnType<typeof createServerSupabase>,
@@ -51,6 +83,21 @@ async function deleteDocumentAndVersionFiles(
     ),
   );
   return db.from("documents").delete().eq("id", documentId);
+}
+
+async function loadDocumentUploadResponse(
+  db: ReturnType<typeof createServerSupabase>,
+  documentId: string,
+) {
+  const { data } = await db
+    .from("documents")
+    .select("*")
+    .eq("id", documentId)
+    .single();
+  if (!data) return null;
+  await attachLatestVersionNumbers(db, [data]);
+  await attachActiveVersionPaths(db, [data]);
+  return data;
 }
 
 // GET /single-documents
@@ -88,25 +135,37 @@ documentsRouter.post(
 // POST /single-documents/upload-url — presigned PUT URL for direct-to-R2 upload
 documentsRouter.post("/upload-url", requireAuth, async (req, res) => {
   const userId = res.locals.userId as string;
-  const { filename, project_id } = req.body as { filename?: string; project_id?: string };
-  if (!filename) return void res.status(400).json({ detail: "filename is required" });
-  const suffix = filename.includes(".") ? filename.split(".").pop()!.toLowerCase() : "";
-  if (!ALLOWED_TYPES.has(suffix))
-    return void res.status(400).json({ detail: `Unsupported file type: ${suffix}. Allowed: pdf, docx, doc` });
-  const contentType = suffix === "pdf"
-    ? "application/pdf"
-    : "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  const userEmail = res.locals.userEmail as string | undefined;
+  const parsed = parseUploadFilename(req.body?.filename);
+  if (!parsed.ok) return void res.status(400).json({ detail: parsed.detail });
+  const projectId =
+    typeof req.body?.project_id === "string" && req.body.project_id.trim()
+      ? req.body.project_id.trim()
+      : null;
   const db = createServerSupabase();
+  if (projectId) {
+    const access = await checkProjectAccess(projectId, userId, userEmail, db);
+    if (!access.ok)
+      return void res.status(404).json({ detail: "Project not found" });
+  }
   const { data: doc, error } = await db
     .from("documents")
-    .insert({ project_id: project_id || null, user_id: userId, status: "processing", filename, file_type: suffix })
+    .insert({ project_id: projectId, user_id: userId, status: "processing" })
     .select("id")
     .single();
   if (error || !doc) return void res.status(500).json({ detail: "Failed to create document record" });
-  const key = storageKey(userId, doc.id as string, filename);
-  const upload_url = await getUploadSignedUrl(key, contentType);
-  if (!upload_url) return void res.status(500).json({ detail: "Storage not configured" });
-  res.json({ doc_id: doc.id, upload_url, storage_key: key, content_type: contentType });
+  const key = storageKey(userId, doc.id as string, parsed.filename);
+  const upload_url = await getUploadSignedUrl(key, parsed.contentType);
+  if (!upload_url) {
+    await db.from("documents").delete().eq("id", doc.id).eq("user_id", userId);
+    return void res.status(500).json({ detail: "Storage not configured" });
+  }
+  res.json({
+    doc_id: doc.id,
+    upload_url,
+    storage_key: key,
+    content_type: parsed.contentType,
+  });
 });
 
 // POST /single-documents/:documentId/finalize-upload — called after direct R2 PUT
@@ -116,27 +175,102 @@ documentsRouter.post("/:documentId/finalize-upload", requireAuth, async (req, re
   const db = createServerSupabase();
   const { data: doc, error } = await db
     .from("documents")
-    .select("id, filename, file_type, project_id, user_id")
+    .select("id, project_id, user_id, status, current_version_id")
     .eq("id", documentId)
     .eq("user_id", userId)
-    .eq("status", "processing")
     .single();
   if (error || !doc) return void res.status(404).json({ detail: "Document not found" });
-  const filename = (doc.filename as string) || "document";
-  const suffix = (doc.file_type as string) || "pdf";
-  const key = storageKey(userId, documentId, filename);
+  if (doc.status === "ready" && doc.current_version_id) {
+    const existing = await loadDocumentUploadResponse(db, documentId);
+    return void res.json(existing);
+  }
+  if (doc.status !== "processing") {
+    return void res.status(409).json({ detail: "Document is not awaiting upload finalization" });
+  }
+  const parsed = parseUploadFilename(req.body?.filename);
+  if (!parsed.ok) return void res.status(400).json({ detail: parsed.detail });
+  const key = storageKey(userId, documentId, parsed.filename);
   const uploaded = await fileExists(key);
   if (!uploaded)
     return void res.status(422).json({ detail: "File not found in storage. Upload the file before calling finalize." });
-  const pdfStoragePath = suffix === "pdf" ? key : null;
+  const sizeBytes =
+    Number.isSafeInteger(req.body?.size_bytes) && req.body.size_bytes >= 0
+      ? req.body.size_bytes
+      : null;
+  let pdfStoragePath = parsed.suffix === "pdf" ? key : null;
+  if (parsed.suffix === "docx" || parsed.suffix === "doc") {
+    const bytes = await downloadFile(key);
+    if (bytes) {
+      try {
+        const pdfBytes = await docxToPdf(Buffer.from(bytes));
+        const pdfKey = convertedPdfKey(userId, documentId);
+        await uploadFile(
+          pdfKey,
+          pdfBytes.buffer.slice(
+            pdfBytes.byteOffset,
+            pdfBytes.byteOffset + pdfBytes.byteLength,
+          ) as ArrayBuffer,
+          "application/pdf",
+        );
+        pdfStoragePath = pdfKey;
+      } catch (conversionError) {
+        console.error(
+          `[finalize-upload] DOCX/DOC to PDF conversion failed for ${parsed.filename}`,
+          conversionError,
+        );
+      }
+    }
+  }
   const { data: versionRow, error: verErr } = await db
     .from("document_versions")
-    .insert({ document_id: documentId, storage_path: key, pdf_storage_path: pdfStoragePath, source: "upload", version_number: 1, filename, file_type: suffix })
+    .insert({
+      document_id: documentId,
+      storage_path: key,
+      pdf_storage_path: pdfStoragePath,
+      source: "upload",
+      version_number: 1,
+      filename: parsed.filename,
+      file_type: parsed.suffix,
+      size_bytes: sizeBytes,
+    })
     .select("id")
     .single();
-  if (verErr || !versionRow) return void res.status(500).json({ detail: "Failed to create version record" });
-  await db.from("documents").update({ current_version_id: versionRow.id, status: "ready" }).eq("id", documentId);
-  const { data: result } = await db.from("documents").select("*").eq("id", documentId).single();
+  if (verErr || !versionRow) {
+    const { data: existingVersion } = await db
+      .from("document_versions")
+      .select("id")
+      .eq("document_id", documentId)
+      .eq("version_number", 1)
+      .maybeSingle();
+    if (!existingVersion) {
+      return void res.status(500).json({ detail: "Failed to create version record" });
+    }
+    const { error: adoptError } = await db
+      .from("documents")
+      .update({ current_version_id: existingVersion.id, status: "ready" })
+      .eq("id", documentId)
+      .eq("user_id", userId);
+    if (adoptError) {
+      return void res.status(500).json({ detail: "Failed to finalize document" });
+    }
+    const existing = await loadDocumentUploadResponse(db, documentId);
+    if (!existing) {
+      return void res.status(500).json({ detail: "Failed to load finalized document" });
+    }
+    return void res.json(existing);
+  }
+  const { error: finalizeError } = await db
+    .from("documents")
+    .update({ current_version_id: versionRow.id, status: "ready" })
+    .eq("id", documentId)
+    .eq("user_id", userId);
+  if (finalizeError) {
+    return void res.status(500).json({ detail: "Failed to finalize document" });
+  }
+  const result = await loadDocumentUploadResponse(db, documentId);
+  if (!result) {
+    return void res.status(500).json({ detail: "Failed to load finalized document" });
+  }
   res.json(result);
 });
 
@@ -148,12 +282,30 @@ documentsRouter.delete("/:documentId", requireAuth, async (req, res) => {
 
   const { data: doc, error } = await db
     .from("documents")
-    .select("id")
+    .select("id, status")
     .eq("id", documentId)
     .eq("user_id", userId)
     .single();
   if (error || !doc)
     return void res.status(404).json({ detail: "Document not found" });
+
+  const parsedCleanupFilename = parseUploadFilename(req.query.filename);
+  if (parsedCleanupFilename.ok && doc.status !== "processing") {
+    return void res.status(409).json({
+      detail: "Completed documents cannot be removed by upload cleanup",
+    });
+  }
+  if (doc.status === "processing") {
+    const parsed = parsedCleanupFilename;
+    if (parsed.ok) {
+      await Promise.all([
+        deleteFile(storageKey(userId, documentId, parsed.filename)).catch(
+          () => {},
+        ),
+        deleteFile(convertedPdfKey(userId, documentId)).catch(() => {}),
+      ]);
+    }
+  }
 
   await deleteDocumentAndVersionFiles(db, documentId);
   res.status(204).send();

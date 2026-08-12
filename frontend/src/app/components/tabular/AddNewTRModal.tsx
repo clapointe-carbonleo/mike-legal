@@ -8,6 +8,8 @@ import {
     listProjects,
     listStandaloneDocuments,
     listWorkflows,
+    reportDocumentBatchUploadFailures,
+    uploadDocumentsBatch,
     uploadProjectDocument,
     uploadStandaloneDocument,
 } from "@/app/lib/mikeApi";
@@ -169,12 +171,17 @@ export function AddNewTRModal({
         if (!files.length) return;
         setUploading(true);
         try {
-            const uploaded = await Promise.all(
-                files.map((f) =>
+            const { documents: uploaded, failures } = await uploadDocumentsBatch(
+                files,
+                (f) =>
                     underProject && selectedProjectId
                         ? uploadProjectDocument(selectedProjectId, f)
                         : uploadStandaloneDocument(f),
-                ),
+            );
+            reportDocumentBatchUploadFailures(
+                "Tabular review document upload",
+                failures,
+                files.length,
             );
             if (underProject && selectedProjectId) {
                 setProjectDocs((prev) => [...uploaded, ...prev]);

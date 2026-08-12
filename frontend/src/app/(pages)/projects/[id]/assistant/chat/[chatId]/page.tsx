@@ -25,6 +25,8 @@ import {
     deleteDocument,
     getChat,
     getProject,
+    reportDocumentBatchUploadFailures,
+    uploadDocumentsBatch,
     uploadProjectDocument,
     createProjectFolder,
     renameProjectFolder,
@@ -615,8 +617,14 @@ export default function ProjectAssistantChatPage({ params }: Props) {
         if (!files.length) return;
         setUploading(true);
         try {
-            const uploaded = await Promise.all(
-                files.map((f) => uploadProjectDocument(projectId, f)),
+            const { documents: uploaded, failures } = await uploadDocumentsBatch(
+                files,
+                (f) => uploadProjectDocument(projectId, f),
+            );
+            reportDocumentBatchUploadFailures(
+                "Project assistant upload",
+                failures,
+                files.length,
             );
             setProject((prev) => {
                 if (!prev) return prev;

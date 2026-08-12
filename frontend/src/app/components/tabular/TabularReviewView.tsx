@@ -26,7 +26,10 @@ import {
     regenerateTabularCell,
     streamTabularGeneration,
     updateTabularReview,
-    uploadReviewDocument,
+    reportDocumentBatchUploadFailures,
+    uploadDocumentsBatch,
+    uploadProjectDocument,
+    uploadStandaloneDocument,
 } from "@/app/lib/mikeApi";
 import type {
     ColumnConfig,
@@ -226,17 +229,18 @@ export function TRView({ reviewId, projectId }: Props) {
         if (files.length === 0) return;
         setUploadingDroppedFilenames(files.map((file) => file.name));
         try {
-            const uploaded: Document[] = [];
-            const documentIds = documents.map((document) => document.id);
-            for (const file of files) {
-                const document = await uploadReviewDocument(reviewId, file, {
-                    projectId,
-                    documentIds,
-                    columnsConfig: columns,
-                });
-                uploaded.push(document);
-                documentIds.push(document.id);
-            }
+            const { documents: uploaded, failures } = await uploadDocumentsBatch(
+                files,
+                (file) =>
+                    projectId
+                        ? uploadProjectDocument(projectId, file)
+                        : uploadStandaloneDocument(file),
+            );
+            reportDocumentBatchUploadFailures(
+                "Tabular review document drop upload",
+                failures,
+                files.length,
+            );
             await handleAddDocuments(uploaded);
         } catch (err) {
             console.error("Tabular review document drop upload failed", err);

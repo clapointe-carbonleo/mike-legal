@@ -5,6 +5,8 @@ import { Users, Upload } from "lucide-react";
 import {
     addDocumentToProject,
     createProject,
+    reportDocumentBatchUploadFailures,
+    uploadDocumentsBatch,
     uploadProjectDocument,
 } from "@/app/lib/mikeApi";
 import { useDirectoryData } from "../shared/useDirectoryData";
@@ -58,11 +60,27 @@ export function NewProjectModal({ open, onClose, onCreated }: Props) {
                     ? sharedEmails.filter((email) => email !== ownEmail)
                     : sharedEmails,
             );
-            await Promise.all([
-                ...[...selectedDocIds].map((id) => addDocumentToProject(project.id, id).catch(() => {})),
-                ...pendingFiles.map((f) => uploadProjectDocument(project.id, f).catch(() => {})),
+            const [addedDocuments, uploadedResult] = await Promise.all([
+                Promise.all(
+                    [...selectedDocIds].map((id) =>
+                        addDocumentToProject(project.id, id).catch(() => null),
+                    ),
+                ),
+                uploadDocumentsBatch(pendingFiles, (file) =>
+                    uploadProjectDocument(project.id, file),
+                ),
             ]);
-            onCreated({ ...project, document_count: selectedDocIds.size + pendingFiles.length });
+            reportDocumentBatchUploadFailures(
+                "New project pending document upload",
+                uploadedResult.failures,
+                pendingFiles.length,
+            );
+            onCreated({
+                ...project,
+                document_count:
+                    addedDocuments.filter(Boolean).length +
+                    uploadedResult.documents.length,
+            });
             resetForm();
             onClose();
         } catch (err: unknown) {

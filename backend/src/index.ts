@@ -1,5 +1,5 @@
 import "dotenv/config";
-import express from "express";
+import express, { type Request } from "express";
 import cors from "cors";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
@@ -36,13 +36,14 @@ function makeLimiter(options: {
   windowMs: number;
   max: number;
   message?: string;
+  skip?: (req: Request) => boolean;
 }) {
   return rateLimit({
     windowMs: options.windowMs,
     max: options.max,
     standardHeaders: true,
     legacyHeaders: false,
-    skip: (req) => req.method === "OPTIONS",
+    skip: (req) => req.method === "OPTIONS" || Boolean(options.skip?.(req)),
     message: {
       detail:
         options.message ?? "Too many requests. Please try again later.",
@@ -50,9 +51,18 @@ function makeLimiter(options: {
   });
 }
 
+function isPresignedUploadRequest(req: Request): boolean {
+  return (
+    req.method === "POST" &&
+    (req.path === "/single-documents/upload-url" ||
+      /^\/single-documents\/[^/]+\/finalize-upload$/.test(req.path))
+  );
+}
+
 const generalLimiter = makeLimiter({
   windowMs: minutes(envInt("RATE_LIMIT_GENERAL_WINDOW_MINUTES", 15)),
   max: envInt("RATE_LIMIT_GENERAL_MAX", 300),
+  skip: isPresignedUploadRequest,
 });
 
 const chatLimiter = makeLimiter({
@@ -69,6 +79,12 @@ const chatCreateLimiter = makeLimiter({
 const uploadLimiter = makeLimiter({
   windowMs: hours(envInt("RATE_LIMIT_UPLOAD_WINDOW_HOURS", 1)),
   max: envInt("RATE_LIMIT_UPLOAD_MAX", 50),
+  message: "Too many upload requests. Please try again later.",
+});
+
+const presignedUploadLimiter = makeLimiter({
+  windowMs: hours(envInt("RATE_LIMIT_PRESIGNED_UPLOAD_WINDOW_HOURS", 1)),
+  max: envInt("RATE_LIMIT_PRESIGNED_UPLOAD_MAX", 1000),
   message: "Too many upload requests. Please try again later.",
 });
 
@@ -141,6 +157,11 @@ app.post("/tabular-review/:reviewId/chat", chatLimiter);
 app.post("/tabular-review/:reviewId/generate", chatLimiter);
 app.post("/chat/create", chatCreateLimiter);
 app.post("/chat/:chatId/generate-title", chatCreateLimiter);
+app.post("/single-documents/upload-url", presignedUploadLimiter);
+app.post(
+  "/single-documents/:documentId/finalize-upload",
+  presignedUploadLimiter,
+);
 app.post("/single-documents", uploadLimiter);
 app.post("/single-documents/:documentId/versions", uploadLimiter);
 app.put(

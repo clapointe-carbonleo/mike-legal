@@ -27,6 +27,8 @@ import {
     replaceDocumentVersionFile,
     copyDocumentVersionFromDocument,
     deleteDocumentVersion,
+    reportDocumentBatchUploadFailures,
+    uploadDocumentsBatch,
     uploadProjectDocument,
     renameDocumentVersion,
     type DocumentVersion,
@@ -1074,13 +1076,29 @@ export function ProjectDocumentsView({ projectId }: Props) {
         if (files.length === 0) return;
         const { supported, unsupported } =
             partitionSupportedDocumentFiles(files);
-        setDocumentUploadWarning(formatUnsupportedDocumentWarning(unsupported));
+        const unsupportedWarning = formatUnsupportedDocumentWarning(unsupported);
+        setDocumentUploadWarning(unsupportedWarning);
         if (supported.length === 0) return;
         setUploadingDroppedFilenames(supported.map((file) => file.name));
         try {
-            const uploaded = await Promise.all(
-                supported.map((file) => uploadProjectDocument(projectId, file)),
+            const { documents: uploaded, failures } = await uploadDocumentsBatch(
+                supported,
+                (file) => uploadProjectDocument(projectId, file),
             );
+            reportDocumentBatchUploadFailures(
+                "Project document drop upload",
+                failures,
+                supported.length,
+                { notifyUser: false },
+            );
+            if (failures.length > 0) {
+                const failureWarning = `${failures.length} of ${supported.length} files failed; successful uploads were kept.`;
+                setDocumentUploadWarning(
+                    unsupportedWarning
+                        ? `${unsupportedWarning} ${failureWarning}`
+                        : failureWarning,
+                );
+            }
             invalidateDirectoryCache();
             handleDocsSelected(uploaded);
         } catch (err) {
