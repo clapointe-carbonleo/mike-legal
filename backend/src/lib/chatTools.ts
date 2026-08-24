@@ -1346,9 +1346,18 @@ export async function generateDocx(
     const filename = `${safeTitle}.docx`;
     const key = generatedDocKey(userId, docId, filename);
 
+    // Slice to the exact bytes. Packer.toBuffer may return a Buffer that is a
+    // view into a larger, shared/pooled ArrayBuffer; passing `buf.buffer`
+    // directly hands the S3 client the whole pool, so its signed
+    // x-amz-content-sha256 disagrees with the bytes sent and R2 rejects the
+    // upload with XAmzContentSHA256Mismatch. This mirrors the edit path above.
+    const docxBytes = buf.buffer.slice(
+      buf.byteOffset,
+      buf.byteOffset + buf.byteLength,
+    ) as ArrayBuffer;
     await uploadFile(
       key,
-      buf.buffer as ArrayBuffer,
+      docxBytes,
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     );
     const downloadUrl = buildDownloadUrl(key, filename);
