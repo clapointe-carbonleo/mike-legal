@@ -1364,6 +1364,9 @@ export async function generateDocx(
         project_id: options?.projectId ?? null,
         user_id: userId,
         status: "ready",
+        filename,
+        file_type: "docx",
+        size_bytes: buf.byteLength,
       })
       .select("id")
       .single();
