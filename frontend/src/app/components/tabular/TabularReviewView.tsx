@@ -20,6 +20,8 @@ import {
 import {
     clearTabularCells,
     deleteTabularReview,
+    downloadSignedFile,
+    exportTabularReviewToWord,
     getTabularReview,
     getProject,
     getTabularReviewPeople,
@@ -88,6 +90,7 @@ export function TRView({ reviewId, projectId }: Props) {
         "idle" | "deleting" | "deleted"
     >("idle");
     const [ownerOnlyAction, setOwnerOnlyAction] = useState<string | null>(null);
+    const [exportingWord, setExportingWord] = useState(false);
     const { user } = useAuth();
     const [expandedCell, setExpandedCell] = useState<TabularCell | null>(null);
     const [expandedCellCitation, setExpandedCellCitation] = useState<
@@ -546,6 +549,21 @@ export function TRView({ reviewId, projectId }: Props) {
         await clearResultsForDocuments(documents.map((document) => document.id));
     }
 
+    // The Word export is built server-side so the result is stored as a
+    // first-class document (openable and editable) rather than a one-off file.
+    async function handleExportWord() {
+        if (exportingWord) return;
+        setExportingWord(true);
+        try {
+            const result = await exportTabularReviewToWord(reviewId);
+            await downloadSignedFile(result.download_url, result.filename);
+        } catch (err) {
+            console.error("Word export failed", err);
+        } finally {
+            setExportingWord(false);
+        }
+    }
+
     async function handleTitleCommit(newTitle: string) {
         if (!newTitle || newTitle === review?.title) return;
         if (review?.is_owner === false) {
@@ -726,7 +744,7 @@ export function TRView({ reviewId, projectId }: Props) {
                                                 onSelect: requestWorkflow,
                                             },
                                             {
-                                                label: "Export",
+                                                label: "Export to Excel",
                                                 icon: Download,
                                                 onSelect: () =>
                                                     exportTabularReviewToExcel({
@@ -738,6 +756,17 @@ export function TRView({ reviewId, projectId }: Props) {
                                                         cells,
                                                     }),
                                                 disabled:
+                                                    columns.length === 0 ||
+                                                    documents.length === 0,
+                                            },
+                                            {
+                                                label: exportingWord
+                                                    ? "Exporting to Word…"
+                                                    : "Export to Word",
+                                                icon: Download,
+                                                onSelect: handleExportWord,
+                                                disabled:
+                                                    exportingWord ||
                                                     columns.length === 0 ||
                                                     documents.length === 0,
                                             },

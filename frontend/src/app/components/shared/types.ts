@@ -452,6 +452,7 @@ export interface Workflow {
   is_system: boolean;
   created_at: string;
   practice?: string | null;
+  output_docx?: boolean;
   shared_by_name?: string | null;
   allow_edit?: boolean;
   is_owner?: boolean;
