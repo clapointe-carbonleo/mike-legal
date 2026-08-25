@@ -1,7 +1,10 @@
 import { Router } from "express";
 import { requireAuth } from "../middleware/auth";
 import { createServerSupabase } from "../lib/supabase";
-import { materializeWorkflowDocuments } from "../lib/workflowDocuments";
+import {
+    materializeWorkflowDocuments,
+    resolveWorkflowOutputFolder,
+} from "../lib/workflowDocuments";
 import {
     buildDocContext,
     buildMessages,
@@ -523,12 +526,21 @@ chatRouter.post("/", requireAuth, async (req, res) => {
     // Copy the workflow's reference documents into the chat's project (if it
     // has one) before the doc context is built, and hand their ids straight to
     // the builder so the template is usable in this very turn.
+    const outputFolderId = lastUser?.workflow?.id
+        ? await resolveWorkflowOutputFolder({
+              workflowId: lastUser.workflow.id,
+              projectId: resolvedProjectId ?? null,
+              userId,
+              db,
+          })
+        : null;
     const workflowDocs = lastUser?.workflow?.id
         ? await materializeWorkflowDocuments({
               workflowId: lastUser.workflow.id,
               projectId: resolvedProjectId ?? null,
               userId,
               db,
+              folderId: outputFolderId,
           })
         : [];
 
@@ -598,6 +610,7 @@ chatRouter.post("/", requireAuth, async (req, res) => {
             apiKeys,
             signal: streamAbort.signal,
             projectId: resolvedProjectId,
+            outputFolderId,
         });
 
         devLog("[chat/stream] LLM stream finished", {

@@ -1,5 +1,6 @@
 import { copyDocuments, DocumentCopyError } from "./documentCopy";
 import { attachActiveVersionPaths } from "./documentVersions";
+import { ensureProjectFolder } from "./projectFolders";
 import { createServerSupabase } from "./supabase";
 
 // ---------------------------------------------------------------------------
@@ -17,6 +18,31 @@ import { createServerSupabase } from "./supabase";
 // ---------------------------------------------------------------------------
 
 type Db = ReturnType<typeof createServerSupabase>;
+
+/**
+ * Resolve the project subfolder a workflow files its output into, creating it
+ * on first use. Returns null when the workflow names no folder, so documents
+ * keep landing at the project root.
+ */
+export async function resolveWorkflowOutputFolder(params: {
+  workflowId: string;
+  projectId: string | null;
+  userId: string;
+  db: Db;
+}): Promise<string | null> {
+  const { workflowId, projectId, userId, db } = params;
+  if (!projectId) return null;
+
+  const { data: workflow } = await db
+    .from("workflows")
+    .select("output_folder_name")
+    .eq("id", workflowId)
+    .maybeSingle();
+  const name = (workflow?.output_folder_name as string | null)?.trim();
+  if (!name) return null;
+
+  return ensureProjectFolder({ projectId, userId, name, db });
+}
 
 export type MaterializedWorkflowDoc = {
   document_id: string;

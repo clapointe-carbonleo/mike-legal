@@ -941,7 +941,11 @@ export async function generateDocx(
   sections: unknown[],
   userId: string,
   db: ReturnType<typeof createServerSupabase>,
-  options?: { landscape?: boolean; projectId?: string | null },
+  options?: {
+    landscape?: boolean;
+    projectId?: string | null;
+    folderId?: string | null;
+  },
 ) {
   try {
     const built = await buildDocxBuffer(title, sections, {
@@ -955,6 +959,7 @@ export async function generateDocx(
       userId,
       db,
       projectId: options?.projectId ?? null,
+      folderId: options?.folderId ?? null,
     });
     if ("error" in saved) return saved;
 
@@ -1905,6 +1910,7 @@ export async function runToolCalls(
   projectId?: string | null,
   courtlistenerState?: CourtlistenerTurnState,
   apiKeys?: import("./llm").UserApiKeys,
+  outputFolderId?: string | null,
 ): Promise<{
   toolResults: unknown[];
   docsRead: { filename: string; document_id?: string }[];
@@ -3048,6 +3054,7 @@ export async function runToolCalls(
         generateDocx(title, args.sections as unknown[], userId, db, {
           landscape,
           projectId: projectId ?? null,
+          folderId: outputFolderId ?? null,
         }),
       );
       console.log("[generate_docx] result keys:", Object.keys(result));
@@ -3446,6 +3453,8 @@ export async function runLLMStream(params: {
    * generated docs still get persisted, but as standalone documents.
    */
   projectId?: string | null;
+  /** Project subfolder that generated documents are filed into, if any. */
+  outputFolderId?: string | null;
 }): Promise<{
   fullText: string;
   events: AssistantEvent[];
@@ -3467,6 +3476,7 @@ export async function runLLMStream(params: {
     apiKeys,
     signal,
     projectId,
+    outputFolderId,
   } = params;
   const researchTools = includeResearchTools ? COURTLISTENER_TOOLS : [];
   const mcpTools = await buildUserMcpTools(userId, db);
@@ -3690,6 +3700,7 @@ export async function runLLMStream(params: {
           projectId,
         courtlistenerTurnState,
         apiKeys,
+        outputFolderId,
       );
         throwIfAborted(signal);
         for (const r of docsRead) {

@@ -453,6 +453,7 @@ export interface Workflow {
   created_at: string;
   practice?: string | null;
   output_docx?: boolean;
+  output_folder_name?: string | null;
   reference_document_count?: number;
   reference_documents?: {
     id: string;

@@ -83,6 +83,8 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
         NonNullable<Workflow["reference_documents"]>
     >([]);
     const [addRefDocOpen, setAddRefDocOpen] = useState(false);
+    const [outputFolderName, setOutputFolderName] = useState("");
+    const folderDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const [columns, setColumns] = useState<ColumnConfig[]>([]);
 
     // Save status
@@ -144,6 +146,7 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
                 setPromptMd(wf.prompt_md ?? "");
                 setOutputDocx(wf.output_docx === true);
                 setReferenceDocs(wf.reference_documents ?? []);
+                setOutputFolderName(wf.output_folder_name ?? "");
                 setColumns(
                     (wf.columns_config ?? [])
                         .slice()
@@ -196,6 +199,24 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
         } catch {
             setDeleteStatus("idle");
         }
+    }
+
+    // Documents produced by the workflow are filed into this project subfolder,
+    // created on first use. Empty means the project root.
+    function handleOutputFolderChange(next: string) {
+        if (readOnly) return;
+        setOutputFolderName(next);
+        if (folderDebounceRef.current) clearTimeout(folderDebounceRef.current);
+        setSaveStatus("saving");
+        folderDebounceRef.current = setTimeout(async () => {
+            try {
+                await updateWorkflow(id, { output_folder_name: next || null });
+                setSaveStatus("saved");
+                setTimeout(() => setSaveStatus("idle"), 2000);
+            } catch {
+                setSaveStatus("idle");
+            }
+        }, 800);
     }
 
     // Reference documents are copied into the running user's project when the
@@ -450,6 +471,19 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
                                 className="h-2.5 w-2.5 rounded border-gray-200 cursor-pointer accent-black"
                             />
                             Deliver the result as a Word document
+                        </label>
+                        <label className="mb-2 flex shrink-0 items-center gap-2 text-sm text-gray-800">
+                            <span>Dossier de destination</span>
+                            <input
+                                type="text"
+                                value={outputFolderName}
+                                disabled={readOnly}
+                                placeholder="Racine du projet"
+                                onChange={(e) =>
+                                    handleOutputFolderChange(e.target.value)
+                                }
+                                className="rounded border border-gray-200 px-2 py-0.5 text-sm text-gray-800 placeholder:text-gray-400"
+                            />
                         </label>
                         <div className="mb-2 flex shrink-0 flex-wrap items-center gap-2 text-sm text-gray-800">
                             <span>Documents de référence</span>

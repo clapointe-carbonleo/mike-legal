@@ -117,7 +117,15 @@ workflowsRouter.get("/", requireAuth, asyncRoute(async (req, res) => {
 // POST /workflows
 workflowsRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
   const userId = res.locals.userId as string;
-  const { title, type, prompt_md, columns_config, practice, output_docx } =
+  const {
+    title,
+    type,
+    prompt_md,
+    columns_config,
+    practice,
+    output_docx,
+    output_folder_name,
+  } =
     req.body as {
       title: string;
       type: string;
@@ -125,6 +133,7 @@ workflowsRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
       columns_config?: unknown;
       practice?: string | null;
       output_docx?: boolean;
+      output_folder_name?: string | null;
     };
   if (!title?.trim())
     return void res.status(400).json({ detail: "title is required" });
@@ -144,6 +153,7 @@ workflowsRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
       columns_config: columns_config ?? null,
       practice: practice ?? null,
       output_docx: output_docx === true,
+      output_folder_name: output_folder_name?.trim() || null,
       is_system: false,
     })
     .select("*")
@@ -164,6 +174,11 @@ async function handleWorkflowUpdate(req: Request, res: Response) {
   if ("practice" in req.body) updates.practice = req.body.practice ?? null;
   if ("output_docx" in req.body)
     updates.output_docx = req.body.output_docx === true;
+  if ("output_folder_name" in req.body) {
+    const raw = req.body.output_folder_name;
+    updates.output_folder_name =
+      typeof raw === "string" && raw.trim() ? raw.trim() : null;
+  }
 
   const db = createServerSupabase();
   const access = await resolveWorkflowAccess(workflowId, userId, userEmail, db);

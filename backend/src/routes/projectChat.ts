@@ -15,7 +15,10 @@ import {
     PROJECT_EXTRA_TOOLS,
     type ChatMessage,
 } from "../lib/chatTools";
-import { materializeWorkflowDocuments } from "../lib/workflowDocuments";
+import {
+    materializeWorkflowDocuments,
+    resolveWorkflowOutputFolder,
+} from "../lib/workflowDocuments";
 import {
     getUserModelSettings,
 } from "../lib/userSettings";
@@ -100,12 +103,20 @@ projectChatRouter.post("/", requireAuth, async (req, res) => {
     // Copy the workflow's reference documents into this project before the doc
     // context is built, so the template is already a normal project document by
     // the time the model looks for it.
+    let outputFolderId: string | null = null;
     if (lastUser?.workflow?.id) {
+        outputFolderId = await resolveWorkflowOutputFolder({
+            workflowId: lastUser.workflow.id,
+            projectId,
+            userId,
+            db,
+        });
         await materializeWorkflowDocuments({
             workflowId: lastUser.workflow.id,
             projectId,
             userId,
             db,
+            folderId: outputFolderId,
         });
     }
 
@@ -200,6 +211,7 @@ projectChatRouter.post("/", requireAuth, async (req, res) => {
             apiKeys,
             signal: streamAbort.signal,
             projectId,
+            outputFolderId,
         });
 
         const persistedEvents = stripTransientAssistantEvents(events);
