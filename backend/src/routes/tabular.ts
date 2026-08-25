@@ -66,7 +66,7 @@ const PAGE_CITATION_RE =
  * exportToExcel formatter: inline page citations are dropped and [[tag]]
  * markers unwrapped, so the exported value reads the way the cell does.
  */
-function formatCellForExport(
+export function formatCellForExport(
     cell: Record<string, unknown> | undefined,
 ): string {
     if (!cell) return "";

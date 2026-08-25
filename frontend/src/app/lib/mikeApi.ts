@@ -1195,6 +1195,7 @@ export async function updateWorkflow(
         prompt_md?: string;
         columns_config?: { index: number; name: string; prompt: string }[];
         practice?: string | null;
+        output_docx?: boolean;
     },
 ): Promise<Workflow> {
     return apiRequest<Workflow>(`/workflows/${workflowId}`, {

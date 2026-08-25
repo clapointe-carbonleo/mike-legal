@@ -71,6 +71,7 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
 
     // Editor state
     const [promptMd, setPromptMd] = useState("");
+    const [outputDocx, setOutputDocx] = useState(false);
     const [columns, setColumns] = useState<ColumnConfig[]>([]);
 
     // Save status
@@ -130,6 +131,7 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
                 }
                 setWorkflow(wf);
                 setPromptMd(wf.prompt_md ?? "");
+                setOutputDocx(wf.output_docx === true);
                 setColumns(
                     (wf.columns_config ?? [])
                         .slice()
@@ -181,6 +183,20 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
             setTimeout(() => router.push("/workflows"), 600);
         } catch {
             setDeleteStatus("idle");
+        }
+    }
+
+    async function handleOutputDocxChange(next: boolean) {
+        if (readOnly) return;
+        setOutputDocx(next);
+        setSaveStatus("saving");
+        try {
+            await updateWorkflow(id, { output_docx: next });
+            setSaveStatus("saved");
+            setTimeout(() => setSaveStatus("idle"), 2000);
+        } catch {
+            setOutputDocx(!next);
+            setSaveStatus("idle");
         }
     }
 
@@ -380,12 +396,28 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
             <div className="flex-1 min-h-0 flex flex-col">
                 {workflow.type === "assistant" ? (
                     /* ── Assistant: WYSIWYG editor ── */
-                    <div className="flex-1 min-h-0 px-4 pb-2 pt-0 md:px-10 md:pb-3">
-                        <WorkflowPromptEditor
-                            value={promptMd}
-                            onChange={readOnly ? undefined : handlePromptChange}
-                            readOnly={readOnly}
-                        />
+                    <div className="flex flex-1 min-h-0 flex-col px-4 pb-2 pt-0 md:px-10 md:pb-3">
+                        <label className="mb-2 flex shrink-0 items-center gap-2 text-sm text-gray-800">
+                            <input
+                                type="checkbox"
+                                checked={outputDocx}
+                                disabled={readOnly}
+                                onChange={(e) =>
+                                    handleOutputDocxChange(e.target.checked)
+                                }
+                                className="h-2.5 w-2.5 rounded border-gray-200 cursor-pointer accent-black"
+                            />
+                            Deliver the result as a Word document
+                        </label>
+                        <div className="min-h-0 flex-1">
+                            <WorkflowPromptEditor
+                                value={promptMd}
+                                onChange={
+                                    readOnly ? undefined : handlePromptChange
+                                }
+                                readOnly={readOnly}
+                            />
+                        </div>
                     </div>
                 ) : (
                     /* ── Tabular: Column table ── */

@@ -92,13 +92,15 @@ workflowsRouter.get("/", requireAuth, asyncRoute(async (req, res) => {
 // POST /workflows
 workflowsRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
   const userId = res.locals.userId as string;
-  const { title, type, prompt_md, columns_config, practice } = req.body as {
-    title: string;
-    type: string;
-    prompt_md?: string;
-    columns_config?: unknown;
-    practice?: string | null;
-  };
+  const { title, type, prompt_md, columns_config, practice, output_docx } =
+    req.body as {
+      title: string;
+      type: string;
+      prompt_md?: string;
+      columns_config?: unknown;
+      practice?: string | null;
+      output_docx?: boolean;
+    };
   if (!title?.trim())
     return void res.status(400).json({ detail: "title is required" });
   if (!["assistant", "tabular"].includes(type))
@@ -116,6 +118,7 @@ workflowsRouter.post("/", requireAuth, asyncRoute(async (req, res) => {
       prompt_md: prompt_md ?? null,
       columns_config: columns_config ?? null,
       practice: practice ?? null,
+      output_docx: output_docx === true,
       is_system: false,
     })
     .select("*")
@@ -134,6 +137,8 @@ async function handleWorkflowUpdate(req: Request, res: Response) {
   if (req.body.columns_config != null)
     updates.columns_config = req.body.columns_config;
   if ("practice" in req.body) updates.practice = req.body.practice ?? null;
+  if ("output_docx" in req.body)
+    updates.output_docx = req.body.output_docx === true;
 
   const db = createServerSupabase();
   const access = await resolveWorkflowAccess(workflowId, userId, userEmail, db);

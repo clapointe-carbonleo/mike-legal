@@ -45,6 +45,32 @@ const devLog = (...args: Parameters<typeof console.log>) => {
   if (isDev) console.log(...args);
 };
 
+const SSE_HEARTBEAT_MS = 15_000;
+
+/**
+ * Keep an SSE stream alive across a long, silent await. Rendering and uploading
+ * a document emits no tokens, so the connection can sit idle long enough for an
+ * intermediary to drop it before the work finishes. Comment frames are ignored
+ * by every client parser, so they cost nothing downstream.
+ */
+async function withSseHeartbeat<T>(
+  write: (chunk: string) => void,
+  run: () => Promise<T>,
+): Promise<T> {
+  const timer = setInterval(() => {
+    try {
+      write(": keepalive\n\n");
+    } catch {
+      // Client already gone — the awaited work still settles on its own.
+    }
+  }, SSE_HEARTBEAT_MS);
+  try {
+    return await run();
+  } finally {
+    clearInterval(timer);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -3125,12 +3151,11 @@ export async function runToolCalls(
       write(
         `data: ${JSON.stringify({ type: "doc_created_start", filename: previewFilename })}\n\n`,
       );
-      const result = await generateDocx(
-        title,
-        args.sections as unknown[],
-        userId,
-        db,
-        { landscape, projectId: projectId ?? null },
+      const result = await withSseHeartbeat(write, () =>
+        generateDocx(title, args.sections as unknown[], userId, db, {
+          landscape,
+          projectId: projectId ?? null,
+        }),
       );
       console.log("[generate_docx] result keys:", Object.keys(result));
       if ("error" in result) console.error("[generate_docx] error:", result.error);
@@ -4132,6 +4157,19 @@ export async function buildProjectDocContext(
   return { docIndex, docStore, folderPaths };
 }
 
+/**
+ * Workflows flagged `output_docx` end their run as a Word document. The
+ * instruction is appended to the prompt the model reads via read_workflow, so
+ * the delivery format travels with the workflow rather than the user's message.
+ */
+function withDocxOutputInstruction(
+  promptMd: string,
+  outputDocx: unknown,
+): string {
+  if (outputDocx !== true) return promptMd;
+  return `${promptMd}\n\n---\n\nWhen you have finished the work above, you MUST call the generate_docx tool to deliver the result as a downloadable Word document. Do not reproduce the full deliverable inline as well — generate the .docx and let the download card speak for it.`;
+}
+
 export async function buildWorkflowStore(
   userId: string,
   userEmail: string | null | undefined,
@@ -4149,12 +4187,15 @@ export async function buildWorkflowStore(
   // Then overlay user-owned assistant workflows.
   const { data: workflows } = await db
     .from("workflows")
-    .select("id, title, prompt_md")
+    .select("id, title, prompt_md, output_docx")
     .eq("user_id", userId)
     .eq("type", "assistant");
   for (const wf of workflows ?? []) {
     if (wf.prompt_md) {
-      store.set(wf.id, { title: wf.title, prompt_md: wf.prompt_md });
+      store.set(wf.id, {
+        title: wf.title,
+        prompt_md: withDocxOutputInstruction(wf.prompt_md, wf.output_docx),
+      });
     }
   }
 
@@ -4170,14 +4211,14 @@ export async function buildWorkflowStore(
     if (sharedIds.length > 0) {
       const { data: sharedWorkflows } = await db
         .from("workflows")
-        .select("id, title, prompt_md")
+        .select("id, title, prompt_md, output_docx")
         .in("id", sharedIds)
         .eq("type", "assistant");
       for (const wf of sharedWorkflows ?? []) {
         if (wf.prompt_md) {
           store.set(wf.id, {
             title: wf.title,
-            prompt_md: wf.prompt_md,
+            prompt_md: withDocxOutputInstruction(wf.prompt_md, wf.output_docx),
           });
         }
       }

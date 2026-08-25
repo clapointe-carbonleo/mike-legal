@@ -325,6 +325,7 @@ create table if not exists public.workflows (
   columns_config jsonb,
   practice text,
   is_system boolean not null default false,
+  output_docx boolean not null default false,
   created_at timestamptz not null default now()
 );
 
