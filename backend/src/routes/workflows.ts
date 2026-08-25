@@ -2,6 +2,7 @@ import { Router, type NextFunction, type Request, type Response } from "express"
 import { requireAuth } from "../middleware/auth";
 import { createServerSupabase } from "../lib/supabase";
 import { ensureDocAccess } from "../lib/access";
+import { warmDocumentExtraction } from "../lib/chatTools";
 
 export const workflowsRouter = Router();
 
@@ -366,6 +367,12 @@ workflowsRouter.post("/:workflowId/documents", requireAuth, asyncRoute(async (re
     { onConflict: "workflow_id,document_id" },
   );
   if (error) return void res.status(500).json({ detail: error.message });
+
+  // Warm the text extraction now, while the user is still in the editor, so
+  // the first run of the workflow does not pay for it — and so every copy made
+  // for a run inherits the cached text with its bytes.
+  void warmDocumentExtraction(document_id, db);
+
   res.status(201).json(await listReferenceDocuments(workflowId, db));
 }));
 

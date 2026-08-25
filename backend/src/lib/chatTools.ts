@@ -1,5 +1,10 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { downloadFile, extractedTextKey, uploadFile } from "./storage";
+import {
+  deleteFile,
+  downloadFile,
+  extractedTextKey,
+  uploadFile,
+} from "./storage";
 import { buildDocxBuffer, persistGeneratedDoc } from "./docxGenerator";
 import { copyDocuments, DocumentCopyError } from "./documentCopy";
 import { materializeWorkflowDocuments } from "./workflowDocuments";
@@ -51,6 +56,24 @@ const devLog = (...args: Parameters<typeof console.log>) => {
  * R2 round-trip when the same document is read repeatedly inside one turn.
  */
 const extractedTextMemo = new Map<string, string>();
+
+/**
+ * Drop the cached extraction for a storage path. Required whenever a version's
+ * bytes are overwritten in place — the path stays the same, so without this the
+ * cache would keep serving the pre-edit text and the model would anchor its
+ * next edits against stale content.
+ */
+export async function invalidateExtractionCache(
+  storagePath: string,
+): Promise<void> {
+  const key = extractedTextKey(storagePath);
+  extractedTextMemo.delete(key);
+  try {
+    await deleteFile(key);
+  } catch (err) {
+    console.error("[invalidateExtractionCache] failed:", err);
+  }
+}
 
 const SSE_HEARTBEAT_MS = 15_000;
 
@@ -1084,6 +1107,7 @@ export async function runEditDocument(params: {
       ab,
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     );
+    await invalidateExtractionCache(newPath);
     await db
       .from("document_versions")
       .update({
@@ -1409,6 +1433,37 @@ export async function readDocumentContent(
         `data: ${JSON.stringify({ type: "doc_read", filename: docInfo.filename })}\n\n`,
       );
     return "Document could not be read.";
+  }
+}
+
+/**
+ * Extract and cache a document's text ahead of time, so the first read does not
+ * pay for it. Used when a document is attached to a workflow as a reference:
+ * the cache is copied along with the bytes, so every future copy of that
+ * template starts warm. Failures are swallowed — this is an optimisation.
+ */
+export async function warmDocumentExtraction(
+  documentId: string,
+  db: ReturnType<typeof createServerSupabase>,
+): Promise<void> {
+  try {
+    const active = await loadActiveVersion(documentId, db);
+    if (!active?.storage_path) return;
+    const store: DocStore = new Map([
+      [
+        "doc-0",
+        {
+          storage_path: active.storage_path,
+          file_type: active.file_type ?? "docx",
+          filename: active.filename ?? "document",
+        },
+      ],
+    ]);
+    await readDocumentContent("doc-0", store, () => {}, undefined, undefined, {
+      emitEvents: false,
+    });
+  } catch (err) {
+    console.error("[warmDocumentExtraction] failed:", err);
   }
 }
 

@@ -1,6 +1,11 @@
 import { convertedPdfKey } from "./convert";
 import { loadActiveVersion } from "./documentVersions";
-import { downloadFile, storageKey, uploadFile } from "./storage";
+import {
+  downloadFile,
+  extractedTextKey,
+  storageKey,
+  uploadFile,
+} from "./storage";
 import { createServerSupabase } from "./supabase";
 
 // ---------------------------------------------------------------------------
@@ -98,6 +103,12 @@ export async function copyDocuments(params: {
       ? "application/pdf"
       : "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
+  // Carry the source's cached text extraction over to every copy. The bytes
+  // are identical, so the extraction is too — without this, each copy of a
+  // workflow template would be re-extracted from scratch the first time it is
+  // read, which for a scanned PDF means a full vision pass per project.
+  const cachedExtraction = await downloadFile(extractedTextKey(sourcePath));
+
   // Parallel uploads: the doc bytes (and PDF rendition if any) for every copy.
   const uploadJobs: Promise<unknown>[] = [];
   const newKeys: string[] = [];
@@ -106,6 +117,11 @@ export async function copyDocuments(params: {
     const key = storageKey(userId, d.id, d.filename);
     newKeys.push(key);
     uploadJobs.push(uploadFile(key, raw, contentType));
+    if (cachedExtraction && cachedExtraction.byteLength > 0) {
+      uploadJobs.push(
+        uploadFile(extractedTextKey(key), cachedExtraction, "text/plain"),
+      );
+    }
     if (pdfBytes) {
       const pdfKey = convertedPdfKey(userId, d.id);
       newPdfKeys.push(pdfKey);
