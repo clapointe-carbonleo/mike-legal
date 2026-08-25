@@ -245,6 +245,15 @@ export function versionStorageKey(
   return `documents/${userId}/${docId}/versions/${versionSlug}${storageExtension(filename, ".bin")}`;
 }
 
+/**
+ * Where the plain-text extraction of a stored document is cached. Keyed off the
+ * document's own storage path, which is immutable per version, so a new version
+ * gets a new cache entry and never reads a stale one.
+ */
+export function extractedTextKey(storagePath: string): string {
+  return `${storagePath}.extracted.txt`;
+}
+
 function storageExtension(filename: string, fallback: string): string {
   const lastDot = filename.lastIndexOf(".");
   if (lastDot < 0) return fallback;

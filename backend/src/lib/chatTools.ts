@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { downloadFile, uploadFile } from "./storage";
+import { downloadFile, extractedTextKey, uploadFile } from "./storage";
 import { buildDocxBuffer, persistGeneratedDoc } from "./docxGenerator";
 import { copyDocuments, DocumentCopyError } from "./documentCopy";
 import { materializeWorkflowDocuments } from "./workflowDocuments";
@@ -45,6 +45,12 @@ const isDev = process.env.NODE_ENV !== "production";
 const devLog = (...args: Parameters<typeof console.log>) => {
   if (isDev) console.log(...args);
 };
+
+/**
+ * Per-instance memo of extracted document text, keyed by cache key. Saves the
+ * R2 round-trip when the same document is read repeatedly inside one turn.
+ */
+const extractedTextMemo = new Map<string, string>();
 
 const SSE_HEARTBEAT_MS = 15_000;
 
@@ -1224,7 +1230,7 @@ export async function runEditDocument(params: {
 // Tool dispatch
 // ---------------------------------------------------------------------------
 
-async function readDocumentContent(
+export async function readDocumentContent(
   docLabel: string,
   docStore: DocStore,
   write: (s: string) => void,
@@ -1268,26 +1274,46 @@ async function readDocumentContent(
   try {
     // Prefer the current tracked-changes version (if any) so read_document
     // reflects accepted/pending edits rather than the original upload.
-    let raw: ArrayBuffer | null = null;
+    // Resolve which version's bytes apply before touching storage, so a cached
+    // extraction can short-circuit the download entirely.
     let sourcePath = docInfo.storage_path;
     if (documentId && db) {
-      const current = await loadCurrentVersionBytes(documentId, db);
-      if (current) {
-        raw = current.bytes.buffer.slice(
-          current.bytes.byteOffset,
-          current.bytes.byteOffset + current.bytes.byteLength,
-        ) as ArrayBuffer;
-        sourcePath = current.storage_path;
-        devLog(
-          `[read_document] using current version path="${sourcePath}" (bytes=${raw.byteLength})`,
-        );
+      const active = await loadActiveVersion(documentId, db);
+      if (active?.storage_path) {
+        sourcePath = active.storage_path;
+        devLog(`[read_document] using current version path="${sourcePath}"`);
       } else {
         devLog(
-          `[read_document] loadCurrentVersionBytes returned null for documentId="${documentId}", falling back to original storage_path`,
+          `[read_document] no active version for documentId="${documentId}", falling back to original storage_path`,
         );
       }
     }
-    if (!raw) {
+
+    // Extraction is by far the slowest part of a turn: a scanned PDF falls
+    // through pdfjs and pdf-parse to a full Claude vision pass. Re-doing that
+    // on every read_document call is what pushes long analyses into the
+    // function's time limit, so the result is cached against the document's
+    // immutable storage path — and a hit skips the download too.
+    const cacheKey = extractedTextKey(sourcePath);
+    const memoized = extractedTextMemo.get(cacheKey);
+    if (memoized !== undefined) {
+      devLog(`[read_document] extraction memo hit for "${docInfo.filename}"`);
+      emitDocRead();
+      return memoized;
+    }
+    const cachedBytes = await downloadFile(cacheKey);
+    if (cachedBytes && cachedBytes.byteLength > 0) {
+      const cachedText = Buffer.from(cachedBytes).toString("utf8");
+      extractedTextMemo.set(cacheKey, cachedText);
+      console.log(
+        `[read_document] extraction cache hit length=${cachedText.length} filename="${docInfo.filename}"`,
+      );
+      emitDocRead();
+      return cachedText;
+    }
+
+    let raw = await downloadFile(sourcePath);
+    if (!raw && sourcePath !== docInfo.storage_path) {
       raw = await downloadFile(docInfo.storage_path);
       if (raw) {
         devLog(
@@ -1361,6 +1387,16 @@ async function readDocumentContent(
     devLog(
       `[read_document] DONE filename="${docInfo.filename}" finalTextLength=${text.length} firstChars=${JSON.stringify(text.slice(0, 120))}`,
     );
+    // Cache real extractions only — never a placeholder describing a failure,
+    // which would make a transient problem permanent. The write is
+    // fire-and-forget so it never adds latency to this turn.
+    if (text && !text.startsWith("[PDF")) {
+      extractedTextMemo.set(cacheKey, text);
+      const encoded = new TextEncoder().encode(text);
+      void uploadFile(cacheKey, encoded.buffer as ArrayBuffer, "text/plain").catch(
+        (err) => console.error("[read_document] extraction cache write:", err),
+      );
+    }
     emitDocRead();
     return text;
   } catch (err) {
@@ -3681,6 +3717,13 @@ export async function runLLMStream(params: {
   };
 
   const selectedModel = resolveModel(model, DEFAULT_MAIN_MODEL);
+  // The serverless function is capped at 800s, so a long analysis can be cut
+  // off mid-flight with nothing to show. Past this budget the model is told to
+  // stop calling tools and answer with what it has, which turns a hard timeout
+  // into a partial but delivered result.
+  const turnStartedAt = Date.now();
+  const TOOL_TIME_BUDGET_MS = 9 * 60 * 1000;
+  let timeBudgetWarned = false;
 
   try {
     throwIfAborted(signal);
@@ -3728,6 +3771,8 @@ export async function runLLMStream(params: {
       },
       runTools: async (calls) => {
         throwIfAborted(signal);
+        const overBudget =
+          Date.now() - turnStartedAt > TOOL_TIME_BUDGET_MS;
         // Emit any text the model produced before this tool turn so the
         // UI sees it before the tool results stream in.
         flushText();
@@ -3839,7 +3884,7 @@ export async function runLLMStream(params: {
           const row = r as { tool_call_id: string; content?: unknown };
           resultByCallId.set(row.tool_call_id, String(row.content ?? ""));
         }
-        return toolCalls.map((c) => ({
+        const mapped = toolCalls.map((c) => ({
           tool_use_id: c.id,
           content:
             resultByCallId.get(c.id) ??
@@ -3847,6 +3892,15 @@ export async function runLLMStream(params: {
               error: `Tool '${c.function.name}' is not available.`,
             }),
         }));
+        // Out of time: append the wrap-up directive to the last result so the
+        // model reads it on its next round and finishes instead of starting
+        // more work it will not get to complete.
+        if (overBudget && mapped.length > 0 && !timeBudgetWarned) {
+          timeBudgetWarned = true;
+          const last = mapped[mapped.length - 1];
+          last.content = `${last.content}\n\n[TIME LIMIT: this turn is close to the server's execution limit. Stop calling tools now and write your final answer from what you already have. Say plainly which parts you could not finish so the user can ask you to continue.]`;
+        }
+        return mapped;
       },
     });
   } catch (err) {
