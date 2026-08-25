@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { downloadFile, storageKey, uploadFile } from "./storage";
+import { downloadFile, uploadFile } from "./storage";
 import { buildDocxBuffer, persistGeneratedDoc } from "./docxGenerator";
-import { convertedPdfKey } from "./convert";
+import { copyDocuments, DocumentCopyError } from "./documentCopy";
 import { createServerSupabase } from "./supabase";
 import {
   applyTrackedEdits,
@@ -941,7 +941,11 @@ export async function generateDocx(
   sections: unknown[],
   userId: string,
   db: ReturnType<typeof createServerSupabase>,
-  options?: { landscape?: boolean; projectId?: string | null },
+  options?: {
+    landscape?: boolean;
+    projectId?: string | null;
+    folderId?: string | null;
+  },
 ) {
   try {
     const built = await buildDocxBuffer(title, sections, {
@@ -955,6 +959,7 @@ export async function generateDocx(
       userId,
       db,
       projectId: options?.projectId ?? null,
+      folderId: options?.folderId ?? null,
     });
     if ("error" in saved) return saved;
 
@@ -1905,6 +1910,7 @@ export async function runToolCalls(
   projectId?: string | null,
   courtlistenerState?: CourtlistenerTurnState,
   apiKeys?: import("./llm").UserApiKeys,
+  outputFolderId?: string | null,
 ): Promise<{
   toolResults: unknown[];
   docsRead: { filename: string; document_id?: string }[];
@@ -2925,215 +2931,108 @@ export async function runToolCalls(
         fail("replicate_document is only available in project chats.");
       } else {
         try {
-          // Pull the active version once — every copy gets the
-          // same starting bytes (with any accepted tracked
-          // changes rolled in), no point re-fetching per copy.
-          const active = await loadActiveVersion(sourceIndexed.document_id, db);
-          const sourcePath = active?.storage_path ?? sourceInfo.storage_path;
-          const sourcePdfPath = active?.pdf_storage_path ?? null;
-          const raw = await downloadFile(sourcePath);
-          const pdfBytes = sourcePdfPath
-            ? await downloadFile(sourcePdfPath)
-            : null;
-          if (!raw) {
-            fail("Could not read the source document's bytes from storage.");
-          } else {
-            // Build N filenames. With count=1 keep the
-            // pre-existing "(copy)" suffix; with count>1 use
-            // numbered "(1)", "(2)" suffixes.
-            const srcExt = sourceInfo.filename.match(/\.[^./\\]+$/)?.[0] ?? "";
-            const baseStem = (() => {
-              if (requestedFilename) {
-                return requestedFilename.replace(/\.[^./\\]+$/, "");
-              }
-              return sourceInfo.filename.replace(/\.[^./\\]+$/, "");
-            })();
-            const filenames: string[] = [];
-            for (let n = 1; n <= requestedCount; n++) {
-              const suffix =
-                requestedCount === 1
-                  ? requestedFilename
-                    ? ""
-                    : " (copy)"
-                  : ` (${n})`;
-              filenames.push(`${baseStem}${suffix}${srcExt}`);
-            }
-
-            // Bulk insert N documents in one round-trip.
-            const docRows = filenames.map((fn) => ({
-              project_id: projectId,
-              user_id: userId,
-              status: "ready",
-            }));
-            const { data: insertedDocs, error: docErr } = await db
-              .from("documents")
-              .insert(docRows)
-              .select("id");
-            if (docErr || !insertedDocs || insertedDocs.length === 0) {
-              fail(
-                `Failed to record replicated documents: ${docErr?.message ?? "unknown"}`,
-              );
-            } else {
-              // Preserve the request order so each row pairs
-              // with the right filename. Supabase returns
-              // inserted rows in the same order as the
-              // payload.
-              const newDocs = (insertedDocs as { id: string }[]).map(
-                (doc, idx) => ({
-                  ...doc,
-                  filename: filenames[idx] ?? "Untitled document.docx",
-                }),
-              );
-              const contentType =
-                sourceInfo.file_type === "pdf"
-                  ? "application/pdf"
-                  : "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-
-              // Parallel uploads: the doc bytes (and PDF
-              // rendition if any) for every new copy.
-              const uploadJobs: Promise<unknown>[] = [];
-              const newKeys: string[] = [];
-              const newPdfKeys: (string | null)[] = [];
-              for (const d of newDocs) {
-                const key = storageKey(userId, d.id, d.filename);
-                newKeys.push(key);
-                uploadJobs.push(uploadFile(key, raw, contentType));
-                if (pdfBytes) {
-                  const pdfKey = convertedPdfKey(userId, d.id);
-                  newPdfKeys.push(pdfKey);
-                  uploadJobs.push(
-                    uploadFile(pdfKey, pdfBytes, "application/pdf"),
-                  );
-                } else {
-                  newPdfKeys.push(null);
-                }
-              }
-              await Promise.all(uploadJobs);
-
-              // Bulk insert N versions in one round-trip.
-              const versionRows = newDocs.map((d, idx) => ({
-                document_id: d.id,
-                storage_path: newKeys[idx],
-                pdf_storage_path: newPdfKeys[idx],
-                source: "upload",
-                version_number: 1,
-                filename: d.filename,
-                file_type: active?.file_type ?? sourceInfo.file_type,
-                size_bytes: active?.size_bytes ?? raw.byteLength,
-                page_count: active?.page_count ?? null,
-              }));
-              const { data: insertedVersions, error: verErr } = await db
-                .from("document_versions")
-                .insert(versionRows)
-                .select("id, document_id");
-              if (
-                verErr ||
-                !insertedVersions ||
-                insertedVersions.length !== newDocs.length
-              ) {
-                fail(
-                  `Failed to record replicated document versions: ${verErr?.message ?? "unknown"}`,
-                );
-              } else {
-                const versionByDocId = new Map<string, string>();
-                for (const v of insertedVersions as {
-                  id: string;
-                  document_id: string;
-                }[]) {
-                  versionByDocId.set(v.document_id, v.id);
-                }
-
-                // current_version_id has to be a per-row
-                // value, so a single UPDATE statement
-                // can't cover all N. Fan out in parallel
-                // instead of sequential awaits.
-                await Promise.all(
-                  newDocs.map((d) =>
-                    db
-                      .from("documents")
-                      .update({
-                        current_version_id: versionByDocId.get(d.id),
-                      })
-                      .eq("id", d.id),
-                  ),
-                );
-
-                // Register every copy under a fresh doc-N
-                // slug so the model can edit/read any of
-                // them in the same turn.
-                const existingLabels = new Set(Object.keys(docIndex));
-                let nextLabelIdx = 0;
-                const copies: {
-                  new_filename: string;
-                  document_id: string;
-                  version_id: string;
-                }[] = [];
-                const toolPayloadCopies: {
-                  doc_id: string;
-                  document_id: string;
-                  version_id: string;
-                  filename: string;
-                  download_url: string;
-                }[] = [];
-                for (let idx = 0; idx < newDocs.length; idx++) {
-                  const d = newDocs[idx];
-                  const newKey = newKeys[idx];
-                  const versionId = versionByDocId.get(d.id);
-                  if (!versionId) continue;
-                  while (existingLabels.has(`doc-${nextLabelIdx}`))
-                    nextLabelIdx++;
-                  const slug = `doc-${nextLabelIdx}`;
-                  existingLabels.add(slug);
-                  docIndex[slug] = {
-                    document_id: d.id,
-                    filename: d.filename,
-                  };
-                  docStore.set(slug, {
-                    storage_path: newKey,
-                    file_type: sourceInfo.file_type,
-                    filename: d.filename,
-                  });
-                  copies.push({
-                    new_filename: d.filename,
-                    document_id: d.id,
-                    version_id: versionId,
-                  });
-                  toolPayloadCopies.push({
-                    doc_id: slug,
-                    document_id: d.id,
-                    version_id: versionId,
-                    filename: d.filename,
-                    download_url: buildDownloadUrl(newKey, d.filename),
-                  });
-                }
-
-                write(
-                  `data: ${JSON.stringify({
-                    type: "doc_replicated",
-                    filename: sourceFilename,
-                    count: copies.length,
-                    copies,
-                  })}\n\n`,
-                );
-                docsReplicated.push({
-                  filename: sourceFilename,
-                  count: copies.length,
-                  copies,
-                });
-                toolResults.push({
-                  role: "tool",
-                  tool_call_id: tc.id,
-                  content: JSON.stringify({
-                    ok: true,
-                    count: copies.length,
-                    copies: toolPayloadCopies,
-                  }),
-                });
-              }
-            }
+          const srcExt = sourceInfo.filename.match(/\.[^./\\]+$/)?.[0] ?? "";
+          const baseStem = (
+            requestedFilename ?? sourceInfo.filename
+          ).replace(/\.[^./\\]+$/, "");
+          // With count=1 keep the pre-existing "(copy)" suffix; with count>1
+          // use numbered "(1)", "(2)" suffixes.
+          const filenames: string[] = [];
+          for (let n = 1; n <= requestedCount; n++) {
+            const suffix =
+              requestedCount === 1
+                ? requestedFilename
+                  ? ""
+                  : " (copy)"
+                : ` (${n})`;
+            filenames.push(`${baseStem}${suffix}${srcExt}`);
           }
+
+          const copied = await copyDocuments({
+            source: {
+              documentId: sourceIndexed.document_id,
+              filename: sourceInfo.filename,
+              fileType: sourceInfo.file_type,
+              storagePath: sourceInfo.storage_path,
+            },
+            filenames,
+            userId,
+            db,
+            projectId,
+            errorLabel: "replicated",
+          });
+
+          // Register every copy under a fresh doc-N slug so the model can
+          // edit/read any of them in the same turn.
+          const existingLabels = new Set(Object.keys(docIndex));
+          let nextLabelIdx = 0;
+          const copies: {
+            new_filename: string;
+            document_id: string;
+            version_id: string;
+          }[] = [];
+          const toolPayloadCopies: {
+            doc_id: string;
+            document_id: string;
+            version_id: string;
+            filename: string;
+            download_url: string;
+          }[] = [];
+          for (const copy of copied) {
+            while (existingLabels.has(`doc-${nextLabelIdx}`)) nextLabelIdx++;
+            const slug = `doc-${nextLabelIdx}`;
+            existingLabels.add(slug);
+            docIndex[slug] = {
+              document_id: copy.document_id,
+              filename: copy.filename,
+            };
+            docStore.set(slug, {
+              storage_path: copy.storage_path,
+              file_type: copy.file_type,
+              filename: copy.filename,
+            });
+            copies.push({
+              new_filename: copy.filename,
+              document_id: copy.document_id,
+              version_id: copy.version_id,
+            });
+            toolPayloadCopies.push({
+              doc_id: slug,
+              document_id: copy.document_id,
+              version_id: copy.version_id,
+              filename: copy.filename,
+              download_url: buildDownloadUrl(copy.storage_path, copy.filename),
+            });
+          }
+
+          write(
+            `data: ${JSON.stringify({
+              type: "doc_replicated",
+              filename: sourceFilename,
+              count: copies.length,
+              copies,
+            })}\n\n`,
+          );
+          docsReplicated.push({
+            filename: sourceFilename,
+            count: copies.length,
+            copies,
+          });
+          toolResults.push({
+            role: "tool",
+            tool_call_id: tc.id,
+            content: JSON.stringify({
+              ok: true,
+              count: copies.length,
+              copies: toolPayloadCopies,
+            }),
+          });
         } catch (e) {
-          fail(`replicate_document failed: ${String(e)}`);
+          fail(
+            e instanceof DocumentCopyError
+              ? e.message
+              : `replicate_document failed: ${String(e)}`,
+          );
         }
       }
     } else if (tc.function.name === "generate_docx") {
@@ -3155,6 +3054,7 @@ export async function runToolCalls(
         generateDocx(title, args.sections as unknown[], userId, db, {
           landscape,
           projectId: projectId ?? null,
+          folderId: outputFolderId ?? null,
         }),
       );
       console.log("[generate_docx] result keys:", Object.keys(result));
@@ -3553,6 +3453,8 @@ export async function runLLMStream(params: {
    * generated docs still get persisted, but as standalone documents.
    */
   projectId?: string | null;
+  /** Project subfolder that generated documents are filed into, if any. */
+  outputFolderId?: string | null;
 }): Promise<{
   fullText: string;
   events: AssistantEvent[];
@@ -3574,6 +3476,7 @@ export async function runLLMStream(params: {
     apiKeys,
     signal,
     projectId,
+    outputFolderId,
   } = params;
   const researchTools = includeResearchTools ? COURTLISTENER_TOOLS : [];
   const mcpTools = await buildUserMcpTools(userId, db);
@@ -3797,6 +3700,7 @@ export async function runLLMStream(params: {
           projectId,
         courtlistenerTurnState,
         apiKeys,
+        outputFolderId,
       );
         throwIfAborted(signal);
         for (const r of docsRead) {
@@ -3979,6 +3883,7 @@ export async function buildDocContext(
   userId: string,
   db: ReturnType<typeof createServerSupabase>,
   chatId?: string | null,
+  extraDocumentIds?: string[],
 ): Promise<{ docIndex: DocIndex; docStore: DocStore }> {
   const docIndex: DocIndex = {};
   const docStore: DocStore = new Map();
@@ -3989,6 +3894,9 @@ export async function buildDocContext(
       if (f.document_id) documentIds.add(f.document_id);
     }
   }
+  // Documents the turn needs even though no message references them — a
+  // workflow's reference documents, materialised just before this call.
+  for (const id of extraDocumentIds ?? []) documentIds.add(id);
 
   // Also pull in document_ids from prior assistant events in this chat —
   // generated docs (generate_docx) and tracked-change edits (edit_document)

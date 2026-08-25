@@ -453,6 +453,15 @@ export interface Workflow {
   created_at: string;
   practice?: string | null;
   output_docx?: boolean;
+  output_folder_name?: string | null;
+  reference_document_count?: number;
+  reference_documents?: {
+    id: string;
+    document_id: string;
+    role: string;
+    filename: string | null;
+    file_type: string | null;
+  }[];
   shared_by_name?: string | null;
   allow_edit?: boolean;
   is_owner?: boolean;

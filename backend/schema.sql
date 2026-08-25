@@ -215,8 +215,14 @@ create table if not exists public.documents (
   id uuid primary key default gen_random_uuid(),
   project_id uuid references public.projects(id) on delete cascade,
   user_id text not null,
+  filename text not null,
+  file_type text,
+  size_bytes integer not null default 0,
+  page_count integer,
+  structure_tree jsonb,
   status text not null default 'pending',
   folder_id uuid references public.project_subfolders(id) on delete set null,
+  pageindex_doc_id text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -235,6 +241,7 @@ create table if not exists public.document_versions (
   source text not null default 'upload',
   version_number integer,
   filename text,
+  display_name text,
   file_type text,
   size_bytes integer,
   page_count integer,
@@ -326,11 +333,35 @@ create table if not exists public.workflows (
   practice text,
   is_system boolean not null default false,
   output_docx boolean not null default false,
+  output_folder_name text,
   created_at timestamptz not null default now()
 );
 
 create index if not exists idx_workflows_user
   on public.workflows(user_id);
+
+-- Reference/template documents carried by a workflow. The copy made for a run
+-- is tagged with documents.origin_workflow_document_id so it is created only
+-- once per project.
+create table if not exists public.workflow_documents (
+  id uuid primary key default gen_random_uuid(),
+  workflow_id uuid not null references public.workflows(id) on delete cascade,
+  document_id uuid not null references public.documents(id) on delete cascade,
+  role text not null default 'template',
+  created_at timestamptz not null default now(),
+  constraint workflow_documents_workflow_document_unique
+    unique(workflow_id, document_id)
+);
+
+create index if not exists idx_workflow_documents_workflow
+  on public.workflow_documents(workflow_id);
+
+alter table public.documents
+  add column if not exists origin_workflow_document_id uuid
+    references public.workflow_documents(id) on delete set null;
+
+create index if not exists idx_documents_origin_workflow_document
+  on public.documents(project_id, origin_workflow_document_id);
 
 create table if not exists public.hidden_workflows (
   id uuid primary key default gen_random_uuid(),
@@ -491,6 +522,7 @@ create table if not exists public.chat_messages (
   content jsonb,
   files jsonb,
   annotations jsonb,
+  workflow jsonb,
   created_at timestamptz not null default now()
 );
 
@@ -807,6 +839,7 @@ revoke all on public.document_edits from anon, authenticated;
 revoke all on public.workflows from anon, authenticated;
 revoke all on public.hidden_workflows from anon, authenticated;
 revoke all on public.workflow_shares from anon, authenticated;
+revoke all on public.workflow_documents from anon, authenticated;
 revoke all on public.chats from anon, authenticated;
 revoke all on public.chat_messages from anon, authenticated;
 revoke all on public.tabular_reviews from anon, authenticated;

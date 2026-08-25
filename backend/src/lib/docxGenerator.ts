@@ -486,6 +486,7 @@ export async function persistGeneratedDoc(params: {
   userId: string;
   db: ReturnType<typeof createServerSupabase>;
   projectId?: string | null;
+  folderId?: string | null;
 }): Promise<PersistedDoc | { error: string }> {
   const { title, buffer, userId, db } = params;
   const docId = crypto.randomUUID().replace(/-/g, "");
@@ -511,6 +512,7 @@ export async function persistGeneratedDoc(params: {
     .from("documents")
     .insert({
       project_id: params.projectId ?? null,
+      folder_id: params.folderId ?? null,
       user_id: userId,
       status: "ready",
       filename,

@@ -21,6 +21,7 @@ import {
 import { AddDocButton } from "./AddDocButton";
 import { AddDocumentsModal } from "../shared/AddDocumentsModal";
 import { AssistantWorkflowModal } from "./AssistantWorkflowModal";
+import { SelectAssistantProjectModal } from "./SelectAssistantProjectModal";
 import { ApiKeyMissingModal } from "../shared/ApiKeyMissingModal";
 import { ModelToggle } from "./ModelToggle";
 import { useSelectedModel } from "@/app/hooks/useSelectedModel";
@@ -67,6 +68,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
         id: string;
         title: string;
     } | null>(null);
+    const [projectModalOpen, setProjectModalOpen] = useState(false);
     const [model, setModel] = useSelectedModel();
     const { profile } = useUserProfile();
     const apiKeys = profile?.apiKeys;
@@ -342,11 +344,26 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                 open={workflowModalOpen}
                 onClose={() => setWorkflowModalOpen(false)}
                 onSelect={(wf) => {
-                    setSelectedWorkflow({ id: wf.id, title: wf.title });
                     setWorkflowModalOpen(false);
+                    // A workflow that produces a document, or pulls a
+                    // reference document in, has nowhere to put it outside a
+                    // project — ask for one instead of orphaning the output.
+                    if (
+                        !projectName &&
+                        (wf.output_docx === true ||
+                            (wf.reference_document_count ?? 0) > 0)
+                    ) {
+                        setProjectModalOpen(true);
+                        return;
+                    }
+                    setSelectedWorkflow({ id: wf.id, title: wf.title });
                 }}
                 projectName={projectName}
                 projectCmNumber={projectCmNumber}
+            />
+            <SelectAssistantProjectModal
+                open={projectModalOpen}
+                onClose={() => setProjectModalOpen(false)}
             />
             <ApiKeyMissingModal
                 open={apiKeyModalProvider !== null}

@@ -179,6 +179,15 @@ export function WorkflowPickerContent({
                                         >
                                             {workflow.title}
                                         </span>
+                                        {(workflow.reference_document_count ??
+                                            0) > 0 && (
+                                            <span
+                                                title="Un document de référence sera ajouté au projet"
+                                                className="shrink-0 rounded border border-gray-200 px-1 text-[10px] text-gray-500"
+                                            >
+                                                {workflow.reference_document_count}
+                                            </span>
+                                        )}
                                         {showTypeIcon ? (
                                             <TypeIcon className="h-3.5 w-3.5 shrink-0 text-gray-400" />
                                         ) : (
