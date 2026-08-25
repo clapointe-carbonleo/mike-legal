@@ -51,10 +51,11 @@ export type MaterializedWorkflowDoc = {
 };
 
 /**
- * Ensure every reference document attached to `workflowId` exists in
- * `projectId`, copying the ones that are missing. Idempotent: a template
- * already copied into this project is left alone, so re-running a workflow
- * never duplicates it.
+ * Ensure every reference document attached to `workflowId` is present for this
+ * run, copying the ones that are missing. Inside a project the copy is a
+ * project document; in the general assistant it is a standalone document owned
+ * by the runner, which `buildDocContext` can still surface. Idempotent either
+ * way, so re-running a workflow never duplicates the template.
  */
 export async function materializeWorkflowDocuments(params: {
   workflowId: string;
@@ -64,7 +65,6 @@ export async function materializeWorkflowDocuments(params: {
   folderId?: string | null;
 }): Promise<MaterializedWorkflowDoc[]> {
   const { workflowId, projectId, userId, db } = params;
-  if (!projectId) return [];
 
   const { data: links } = await db
     .from("workflow_documents")
@@ -74,12 +74,17 @@ export async function materializeWorkflowDocuments(params: {
 
   const linkIds = links.map((link) => link.id as string);
 
-  // Which templates does this project already hold a copy of?
-  const { data: existing } = await db
+  // Which templates does this destination already hold a copy of? Inside a
+  // project that is scoped to the project; in the general assistant, where
+  // there is no project, it is scoped to the running user's standalone
+  // documents so a re-run still reuses the copy rather than piling them up.
+  const existingQuery = db
     .from("documents")
     .select("id, filename, origin_workflow_document_id")
-    .eq("project_id", projectId)
     .in("origin_workflow_document_id", linkIds);
+  const { data: existing } = await (projectId
+    ? existingQuery.eq("project_id", projectId)
+    : existingQuery.eq("user_id", userId).is("project_id", null));
   const existingByOrigin = new Map<string, { id: string; filename: string }>();
   for (const row of existing ?? []) {
     existingByOrigin.set(row.origin_workflow_document_id as string, {
@@ -136,8 +141,8 @@ export async function materializeWorkflowDocuments(params: {
         filenames: [filename],
         userId,
         db,
-        projectId,
-        folderId: params.folderId ?? null,
+        projectId: projectId ?? null,
+        folderId: projectId ? (params.folderId ?? null) : null,
         originWorkflowDocumentId: link.id as string,
         errorLabel: "workflow reference",
       });

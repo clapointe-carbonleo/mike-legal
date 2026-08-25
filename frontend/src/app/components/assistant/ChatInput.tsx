@@ -345,18 +345,21 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                 onClose={() => setWorkflowModalOpen(false)}
                 onSelect={(wf) => {
                     setWorkflowModalOpen(false);
+                    // Keep the selection either way — dropping it silently
+                    // would send the message with no workflow attached, which
+                    // looks like the workflow simply did nothing.
+                    setSelectedWorkflow({ id: wf.id, title: wf.title });
                     // A workflow that produces a document, or pulls a
-                    // reference document in, has nowhere to put it outside a
-                    // project — ask for one instead of orphaning the output.
+                    // reference document in, belongs in a project: that is
+                    // where its output and its template live. Offer to move
+                    // there, but let the run proceed if the user declines.
                     if (
                         !projectName &&
                         (wf.output_docx === true ||
                             (wf.reference_document_count ?? 0) > 0)
                     ) {
                         setProjectModalOpen(true);
-                        return;
                     }
-                    setSelectedWorkflow({ id: wf.id, title: wf.title });
                 }}
                 projectName={projectName}
                 projectCmNumber={projectCmNumber}
