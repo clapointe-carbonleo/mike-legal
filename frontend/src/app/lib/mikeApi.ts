@@ -974,6 +974,45 @@ export async function uploadReviewDocument(
     return uploaded;
 }
 
+/**
+ * Fetch a signed /download/:token URL with the user's bearer token and save the
+ * bytes as a file. The download route is authenticated, so the URL cannot just
+ * be opened in a tab. Only backend-relative URLs are accepted, so the token
+ * never leaves the API origin.
+ */
+export async function downloadSignedFile(
+    downloadUrl: string,
+    filename: string,
+): Promise<void> {
+    if (!downloadUrl.startsWith("/"))
+        throw new Error("Refusing to download from a non-relative URL");
+    const authHeaders = await getAuthHeader();
+    const response = await fetch(`${API_BASE}${downloadUrl}`, {
+        cache: "no-store",
+        headers: { ...authHeaders },
+    });
+    if (!response.ok) throw await toApiError(response, downloadUrl);
+
+    const blobUrl = URL.createObjectURL(await response.blob());
+    const a = document.createElement("a");
+    a.href = blobUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+}
+
+export async function exportTabularReviewToWord(reviewId: string): Promise<{
+    filename: string;
+    download_url: string;
+    document_id: string;
+}> {
+    return apiRequest(`/tabular-review/${reviewId}/export/docx`, {
+        method: "POST",
+    });
+}
+
 export async function deleteTabularReview(reviewId: string): Promise<void> {
     await apiRequest(`/tabular-review/${reviewId}`, { method: "DELETE" });
 }

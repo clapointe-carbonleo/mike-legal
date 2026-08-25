@@ -7,6 +7,7 @@ import {
     loadActiveVersion,
 } from "../lib/documentVersions";
 import { normalizeDocxZipPaths } from "../lib/convert";
+import { buildDocxBuffer, persistGeneratedDoc } from "../lib/docxGenerator";
 import {
     AssistantStreamError,
     buildCancelledAssistantMessage,
@@ -55,6 +56,31 @@ function formatPromptSuffix(format?: string, tags?: string[]): string {
         default:
             return "";
     }
+}
+
+const PAGE_CITATION_RE =
+    /\[\[page:(\d+)\|\|(?:quote:)?((?:[^\[\]]|\[[^\]]*\])+)\]\]/gi;
+
+/**
+ * Render one grid cell as plain text for export. Mirrors the frontend's
+ * exportToExcel formatter: inline page citations are dropped and [[tag]]
+ * markers unwrapped, so the exported value reads the way the cell does.
+ */
+function formatCellForExport(
+    cell: Record<string, unknown> | undefined,
+): string {
+    if (!cell) return "";
+    const status = typeof cell.status === "string" ? cell.status : "";
+    if (status === "pending" || status === "generating") return "";
+    if (status === "error") return "Error";
+    const summary = parseCellContent(cell.content)?.summary;
+    if (!summary) return "";
+    return summary
+        .replace(PAGE_CITATION_RE, "")
+        .replace(/§\d+§/g, "")
+        .replace(/\[\[([^\]]+)\]\]/g, "$1")
+        .replace(/[ \t]+/g, " ")
+        .trim();
 }
 
 export const tabularRouter = Router();
@@ -278,6 +304,127 @@ tabularRouter.get("/:reviewId", requireAuth, async (req, res) => {
         })),
         documents: docs,
     });
+});
+
+// POST /tabular-review/:reviewId/export/docx
+// Deterministic (no LLM) export of the review grid as a landscape Word table.
+// Runs synchronously — it only reads rows already in the database, so it
+// completes in well under the function budget and needs no background job.
+tabularRouter.post("/:reviewId/export/docx", requireAuth, async (req, res) => {
+    const userId = res.locals.userId as string;
+    const userEmail = res.locals.userEmail as string | undefined;
+    const { reviewId } = req.params;
+    const db = createServerSupabase();
+
+    const { data: review, error } = await db
+        .from("tabular_reviews")
+        .select("*")
+        .eq("id", reviewId)
+        .single();
+    if (error || !review)
+        return void res.status(404).json({ detail: "Review not found" });
+    const access = await ensureReviewAccess(review, userId, userEmail, db);
+    if (!access.ok)
+        return void res.status(404).json({ detail: "Review not found" });
+
+    const columns: { index: number; name: string }[] = (
+        review.columns_config ?? []
+    ).map((c: { index: number; name?: string }) => ({
+        index: c.index,
+        name: typeof c.name === "string" ? c.name : "",
+    }));
+    if (columns.length === 0)
+        return void res.status(400).json({ detail: "No columns configured" });
+    const sortedCols = [...columns].sort((a, b) => a.index - b.index);
+
+    const { data: cells } = await db
+        .from("tabular_cells")
+        .select("*")
+        .eq("review_id", reviewId);
+    const cellMap = new Map<string, Record<string, unknown>>();
+    for (const cell of cells ?? [])
+        cellMap.set(`${cell.document_id}:${cell.column_index}`, cell);
+
+    // Mirror GET /:reviewId so the exported rows match what the grid shows.
+    const cellDocIds = [...new Set((cells ?? []).map((c) => c.document_id))];
+    const hasExplicitDocIds = Array.isArray(review.document_ids);
+    const docIds = hasExplicitDocIds
+        ? (review.document_ids as string[])
+        : cellDocIds;
+    const allowedDocIds = new Set(
+        await filterAccessibleDocumentIds(docIds, userId, userEmail, db),
+    );
+    const filteredIds = docIds.filter((id) => allowedDocIds.has(id));
+    const docsResult =
+        filteredIds.length > 0
+            ? await db
+                  .from("documents")
+                  .select("id, filename")
+                  .in("id", filteredIds)
+            : { data: [] as Record<string, unknown>[] };
+    const docsById = new Map<string, Record<string, unknown>>();
+    for (const doc of docsResult.data ?? [])
+        docsById.set(doc.id as string, doc);
+    const docs = filteredIds
+        .map((id) => docsById.get(id))
+        .filter((doc): doc is Record<string, unknown> => Boolean(doc));
+
+    const rows = docs.map((doc) => {
+        const filename =
+            typeof doc.filename === "string" && doc.filename.trim()
+                ? doc.filename.trim()
+                : "Untitled document";
+        return [
+            filename,
+            ...sortedCols.map((col) =>
+                formatCellForExport(cellMap.get(`${doc.id}:${col.index}`)),
+            ),
+        ];
+    });
+
+    const title =
+        typeof review.title === "string" && review.title.trim()
+            ? review.title.trim()
+            : "Tabular Review";
+
+    try {
+        const built = await buildDocxBuffer(
+            title,
+            [
+                {
+                    table: {
+                        headers: [
+                            "Document",
+                            ...sortedCols.map((c) => c.name || `Column ${c.index + 1}`),
+                        ],
+                        rows,
+                    },
+                },
+            ],
+            { landscape: true },
+        );
+        if ("error" in built)
+            return void res.status(500).json({ detail: built.error });
+
+        const saved = await persistGeneratedDoc({
+            title,
+            buffer: built.buffer,
+            userId,
+            db,
+            projectId: review.project_id ?? null,
+        });
+        if ("error" in saved)
+            return void res.status(500).json({ detail: saved.error });
+
+        res.json({
+            filename: saved.filename,
+            download_url: saved.download_url,
+            document_id: saved.document_id,
+        });
+    } catch (e) {
+        console.error("[tabular export docx]", safeErrorLog(e));
+        return void res.status(500).json({ detail: safeErrorMessage(e) });
+    }
 });
 
 // GET /tabular-review/:reviewId/people

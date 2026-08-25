@@ -30,6 +30,13 @@ export type PersistedDoc = {
   storage_path: string;
 };
 
+/** Split a table cell into the lines it should render as, never empty. */
+function tableCellLines(cell: string): string[] {
+  if (!cell.includes("\n")) return [cell];
+  const lines = cell.split("\n").filter((line) => line.trim());
+  return lines.length > 0 ? lines : [""];
+}
+
 const DOCX_MIME =
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
@@ -342,17 +349,21 @@ export async function buildDocxBuffer(
               (cell) =>
                 new TableCell({
                   borders: cellBorder,
-                  children: [
-                    new Paragraph({
-                      children: [
-                        new TextRun({
-                          text: cell,
-                          font: FONT,
-                          size: SIZE,
-                        }),
-                      ],
-                    }),
-                  ],
+                  // One paragraph per line: a cell carrying a bulleted list
+                  // would otherwise collapse, since Word ignores newlines
+                  // inside a single run. Single-line cells are unaffected.
+                  children: tableCellLines(cell).map(
+                    (line) =>
+                      new Paragraph({
+                        children: [
+                          new TextRun({
+                            text: line,
+                            font: FONT,
+                            size: SIZE,
+                          }),
+                        ],
+                      }),
+                  ),
                 }),
             ),
           }),
