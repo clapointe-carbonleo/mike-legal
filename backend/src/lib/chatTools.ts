@@ -2,6 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { downloadFile, uploadFile } from "./storage";
 import { buildDocxBuffer, persistGeneratedDoc } from "./docxGenerator";
 import { copyDocuments, DocumentCopyError } from "./documentCopy";
+import { materializeWorkflowDocuments } from "./workflowDocuments";
 import { createServerSupabase } from "./supabase";
 import {
   applyTrackedEdits,
@@ -2121,10 +2122,62 @@ export async function runToolCalls(
         );
         workflowsApplied.push({ workflow_id: wfId, title: wf.title });
       }
+
+      // A workflow can be applied mid-turn — the model finds it with
+      // list_workflows / read_workflow rather than the user picking it in the
+      // composer. Materialise its reference documents here too, and register
+      // them so read_document / edit_document can act on them in this same
+      // turn. Copies are deduped per project, so doing it here and up-front in
+      // the route never produces two.
+      let workflowDocNote = "";
+      if (wf && docIndex) {
+        const materialised = await materializeWorkflowDocuments({
+          workflowId: wfId,
+          projectId: projectId ?? null,
+          userId,
+          db,
+          folderId: outputFolderId ?? null,
+        });
+        const registered: string[] = [];
+        for (const doc of materialised) {
+          const already = Object.entries(docIndex).find(
+            ([, info]) => info.document_id === doc.document_id,
+          );
+          if (already) {
+            registered.push(`${already[0]}: ${doc.filename}`);
+            continue;
+          }
+          const active = await loadActiveVersion(doc.document_id, db);
+          if (!active?.storage_path) continue;
+          const existingLabels = new Set(Object.keys(docIndex));
+          let idx = 0;
+          while (existingLabels.has(`doc-${idx}`)) idx++;
+          const slug = `doc-${idx}`;
+          docIndex[slug] = {
+            document_id: doc.document_id,
+            filename: doc.filename,
+          };
+          docStore.set(slug, {
+            storage_path: active.storage_path,
+            file_type: active.file_type ?? "docx",
+            filename: doc.filename,
+          });
+          registered.push(`${slug}: ${doc.filename}`);
+        }
+        if (registered.length > 0) {
+          workflowDocNote = `\n\n[Reference documents for this workflow are available in the project: ${registered.join(", ")}. Use these — do not report the template as missing.]`;
+        } else if (!projectId) {
+          workflowDocNote =
+            "\n\n[This workflow carries reference documents, but the chat is not inside a project so they could not be added. Tell the user to run this workflow inside a project.]";
+        }
+      }
+
       toolResults.push({
         role: "tool",
         tool_call_id: tc.id,
-        content: wf ? wf.prompt_md : `Workflow '${wfId}' not found.`,
+        content: wf
+          ? `${wf.prompt_md}${workflowDocNote}`
+          : `Workflow '${wfId}' not found.`,
       });
     } else if (tc.function.name === "read_table_cells" && tabularStore) {
       const colIndices = args.col_indices as number[] | undefined;
