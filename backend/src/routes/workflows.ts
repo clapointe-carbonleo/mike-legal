@@ -87,7 +87,31 @@ workflowsRouter.get("/", requireAuth, asyncRoute(async (req, res) => {
   });
   if (error) return void res.status(500).json({ detail: error.message });
 
-  res.json(data ?? []);
+  // Attach reference-document counts so the picker can show that running the
+  // workflow will pull a template in. Done here rather than in the overview
+  // RPC so its return type stays untouched.
+  const rows = (data ?? []) as Record<string, unknown>[];
+  const workflowIds = rows
+    .map((row) => row.id)
+    .filter((id): id is string => typeof id === "string");
+  const counts = new Map<string, number>();
+  if (workflowIds.length > 0) {
+    const { data: links } = await db
+      .from("workflow_documents")
+      .select("workflow_id")
+      .in("workflow_id", workflowIds);
+    for (const link of links ?? []) {
+      const key = link.workflow_id as string;
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+  }
+
+  res.json(
+    rows.map((row) => ({
+      ...row,
+      reference_document_count: counts.get(row.id as string) ?? 0,
+    })),
+  );
 }));
 
 // POST /workflows

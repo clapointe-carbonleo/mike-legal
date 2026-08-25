@@ -1188,6 +1188,34 @@ export async function createWorkflow(payload: {
     });
 }
 
+export interface WorkflowReferenceDocument {
+    id: string;
+    document_id: string;
+    role: string;
+    filename: string | null;
+    file_type: string | null;
+}
+
+export async function attachWorkflowDocument(
+    workflowId: string,
+    documentId: string,
+): Promise<WorkflowReferenceDocument[]> {
+    return apiRequest(`/workflows/${workflowId}/documents`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ document_id: documentId }),
+    });
+}
+
+export async function detachWorkflowDocument(
+    workflowId: string,
+    linkId: string,
+): Promise<WorkflowReferenceDocument[]> {
+    return apiRequest(`/workflows/${workflowId}/documents/${linkId}`, {
+        method: "DELETE",
+    });
+}
+
 export async function updateWorkflow(
     workflowId: string,
     payload: {

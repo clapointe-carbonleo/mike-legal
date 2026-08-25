@@ -13,11 +13,18 @@ import {
     Users,
     X,
 } from "lucide-react";
-import { deleteWorkflow, getWorkflow, updateWorkflow } from "@/app/lib/mikeApi";
+import {
+    attachWorkflowDocument,
+    deleteWorkflow,
+    detachWorkflowDocument,
+    getWorkflow,
+    updateWorkflow,
+} from "@/app/lib/mikeApi";
 import { ShareWorkflowModal } from "@/app/components/workflows/ShareWorkflowModal";
 import { WFEditColumnModal } from "@/app/components/workflows/WFEditColumnModal";
 import { WFColumnViewModal } from "@/app/components/workflows/WFColumnViewModal";
 import { AddColumnModal } from "@/app/components/tabular/AddColumnModal";
+import { AddDocumentsModal } from "@/app/components/shared/AddDocumentsModal";
 import type { ColumnConfig, Workflow } from "@/app/components/shared/types";
 import { BUILT_IN_WORKFLOWS } from "@/app/components/workflows/builtinWorkflows";
 import { formatIcon, formatLabel } from "@/app/components/tabular/columnFormat";
@@ -72,6 +79,10 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
     // Editor state
     const [promptMd, setPromptMd] = useState("");
     const [outputDocx, setOutputDocx] = useState(false);
+    const [referenceDocs, setReferenceDocs] = useState<
+        NonNullable<Workflow["reference_documents"]>
+    >([]);
+    const [addRefDocOpen, setAddRefDocOpen] = useState(false);
     const [columns, setColumns] = useState<ColumnConfig[]>([]);
 
     // Save status
@@ -132,6 +143,7 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
                 setWorkflow(wf);
                 setPromptMd(wf.prompt_md ?? "");
                 setOutputDocx(wf.output_docx === true);
+                setReferenceDocs(wf.reference_documents ?? []);
                 setColumns(
                     (wf.columns_config ?? [])
                         .slice()
@@ -183,6 +195,29 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
             setTimeout(() => router.push("/workflows"), 600);
         } catch {
             setDeleteStatus("idle");
+        }
+    }
+
+    // Reference documents are copied into the running user's project when the
+    // workflow is applied, so the template is always present.
+    async function handleAttachReferenceDocs(documents: { id: string }[]) {
+        setAddRefDocOpen(false);
+        if (readOnly) return;
+        for (const doc of documents) {
+            try {
+                setReferenceDocs(await attachWorkflowDocument(id, doc.id));
+            } catch (err) {
+                console.error("Failed to attach reference document", err);
+            }
+        }
+    }
+
+    async function handleDetachReferenceDoc(linkId: string) {
+        if (readOnly) return;
+        try {
+            setReferenceDocs(await detachWorkflowDocument(id, linkId));
+        } catch (err) {
+            console.error("Failed to detach reference document", err);
         }
     }
 
@@ -357,6 +392,13 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
                         : null,
                 ]}
             />
+            <AddDocumentsModal
+                open={addRefDocOpen}
+                onClose={() => setAddRefDocOpen(false)}
+                onSelect={handleAttachReferenceDocs}
+                breadcrumb={["Documents de référence"]}
+            />
+
             <WorkflowDetailsModal
                 open={detailsOpen}
                 workflow={workflow}
@@ -409,6 +451,41 @@ export function WorkflowDetailPage({ id, workflowType }: Props) {
                             />
                             Deliver the result as a Word document
                         </label>
+                        <div className="mb-2 flex shrink-0 flex-wrap items-center gap-2 text-sm text-gray-800">
+                            <span>Documents de référence</span>
+                            {referenceDocs.length === 0 && (
+                                <span className="text-gray-500">aucun</span>
+                            )}
+                            {referenceDocs.map((doc) => (
+                                <span
+                                    key={doc.id}
+                                    className="inline-flex items-center gap-1 rounded border border-gray-200 bg-gray-50 px-2 py-0.5 text-xs text-gray-700"
+                                >
+                                    {doc.filename ?? "Document"}
+                                    {!readOnly && (
+                                        <button
+                                            type="button"
+                                            onClick={() =>
+                                                handleDetachReferenceDoc(doc.id)
+                                            }
+                                            title="Retirer"
+                                            className="text-gray-400 hover:text-gray-700"
+                                        >
+                                            <X className="h-3 w-3" />
+                                        </button>
+                                    )}
+                                </span>
+                            ))}
+                            {!readOnly && (
+                                <button
+                                    type="button"
+                                    onClick={() => setAddRefDocOpen(true)}
+                                    className="rounded border border-gray-200 px-2 py-0.5 text-xs text-gray-700 hover:bg-gray-50"
+                                >
+                                    Ajouter
+                                </button>
+                            )}
+                        </div>
                         <div className="min-h-0 flex-1">
                             <WorkflowPromptEditor
                                 value={promptMd}
