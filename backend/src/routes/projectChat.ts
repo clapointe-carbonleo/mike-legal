@@ -15,6 +15,7 @@ import {
     PROJECT_EXTRA_TOOLS,
     type ChatMessage,
 } from "../lib/chatTools";
+import { materializeWorkflowDocuments } from "../lib/workflowDocuments";
 import {
     getUserModelSettings,
 } from "../lib/userSettings";
@@ -93,6 +94,18 @@ projectChatRouter.post("/", requireAuth, async (req, res) => {
             content: lastUser.content,
             files: lastUser.files ?? null,
             workflow: lastUser.workflow ?? null,
+        });
+    }
+
+    // Copy the workflow's reference documents into this project before the doc
+    // context is built, so the template is already a normal project document by
+    // the time the model looks for it.
+    if (lastUser?.workflow?.id) {
+        await materializeWorkflowDocuments({
+            workflowId: lastUser.workflow.id,
+            projectId,
+            userId,
+            db,
         });
     }
 

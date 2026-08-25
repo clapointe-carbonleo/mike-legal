@@ -1,6 +1,7 @@
 import { Router, type NextFunction, type Request, type Response } from "express";
 import { requireAuth } from "../middleware/auth";
 import { createServerSupabase } from "../lib/supabase";
+import { ensureDocAccess } from "../lib/access";
 
 export const workflowsRouter = Router();
 
@@ -236,12 +237,118 @@ workflowsRouter.get("/:workflowId", requireAuth, asyncRoute(async (req, res) => 
   const access = await resolveWorkflowAccess(workflowId, userId, userEmail, db);
   if (!access)
     return void res.status(404).json({ detail: "Workflow not found" });
-  res.json(
-    withWorkflowAccess(access.workflow, {
+  res.json({
+    ...withWorkflowAccess(access.workflow, {
       allowEdit: access.allowEdit,
       isOwner: access.isOwner,
     }),
+    reference_documents: await listReferenceDocuments(workflowId, db),
+  });
+}));
+
+// Reference documents attached to a workflow. They are copied into the running
+// user's project when the workflow is applied, so the template is always
+// present without widening document access to workflow sharees.
+async function listReferenceDocuments(
+  workflowId: string,
+  db: ReturnType<typeof createServerSupabase>,
+) {
+  const { data: links } = await db
+    .from("workflow_documents")
+    .select("id, document_id, role, created_at")
+    .eq("workflow_id", workflowId)
+    .order("created_at", { ascending: true });
+  if (!links || links.length === 0) return [];
+
+  const { data: docs } = await db
+    .from("documents")
+    .select("id, filename, file_type")
+    .in(
+      "id",
+      links.map((link) => link.document_id as string),
+    );
+  const byId = new Map(
+    (docs ?? []).map((doc) => [doc.id as string, doc as Record<string, unknown>]),
   );
+  return links.map((link) => {
+    const doc = byId.get(link.document_id as string);
+    return {
+      id: link.id as string,
+      document_id: link.document_id as string,
+      role: link.role as string,
+      filename: (doc?.filename as string) ?? null,
+      file_type: (doc?.file_type as string) ?? null,
+    };
+  });
+}
+
+// POST /workflows/:workflowId/documents
+workflowsRouter.post("/:workflowId/documents", requireAuth, asyncRoute(async (req, res) => {
+  const userId = res.locals.userId as string;
+  const userEmail = res.locals.userEmail as string | undefined;
+  const { workflowId } = req.params;
+  const { document_id, role } = req.body as {
+    document_id?: string;
+    role?: string;
+  };
+  if (!document_id?.trim())
+    return void res.status(400).json({ detail: "document_id is required" });
+
+  const db = createServerSupabase();
+  const access = await resolveWorkflowAccess(workflowId, userId, userEmail, db);
+  if (!access || access.workflow.is_system || !access.allowEdit) {
+    return void res
+      .status(404)
+      .json({ detail: "Workflow not found or not editable" });
+  }
+
+  // Only a document the caller can already reach may be attached.
+  const { data: doc } = await db
+    .from("documents")
+    .select("id, user_id, project_id")
+    .eq("id", document_id)
+    .single();
+  if (!doc) return void res.status(404).json({ detail: "Document not found" });
+  const docAccess = await ensureDocAccess(
+    doc as { user_id: string; project_id: string | null },
+    userId,
+    userEmail,
+    db,
+  );
+  if (!docAccess.ok)
+    return void res.status(404).json({ detail: "Document not found" });
+
+  const { error } = await db.from("workflow_documents").upsert(
+    {
+      workflow_id: workflowId,
+      document_id,
+      role: typeof role === "string" && role.trim() ? role.trim() : "template",
+    },
+    { onConflict: "workflow_id,document_id" },
+  );
+  if (error) return void res.status(500).json({ detail: error.message });
+  res.status(201).json(await listReferenceDocuments(workflowId, db));
+}));
+
+// DELETE /workflows/:workflowId/documents/:linkId
+workflowsRouter.delete("/:workflowId/documents/:linkId", requireAuth, asyncRoute(async (req, res) => {
+  const userId = res.locals.userId as string;
+  const userEmail = res.locals.userEmail as string | undefined;
+  const { workflowId, linkId } = req.params;
+  const db = createServerSupabase();
+  const access = await resolveWorkflowAccess(workflowId, userId, userEmail, db);
+  if (!access || access.workflow.is_system || !access.allowEdit) {
+    return void res
+      .status(404)
+      .json({ detail: "Workflow not found or not editable" });
+  }
+  const { error } = await db
+    .from("workflow_documents")
+    .delete()
+    .eq("id", linkId)
+    .eq("workflow_id", workflowId);
+  if (error) return void res.status(500).json({ detail: error.message });
+  res.json(await listReferenceDocuments(workflowId, db));
 }));
 
 // GET /workflows/:workflowId/shares

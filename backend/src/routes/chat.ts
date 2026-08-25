@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { requireAuth } from "../middleware/auth";
 import { createServerSupabase } from "../lib/supabase";
+import { materializeWorkflowDocuments } from "../lib/workflowDocuments";
 import {
     buildDocContext,
     buildMessages,
@@ -519,11 +520,24 @@ chatRouter.post("/", requireAuth, async (req, res) => {
         });
     }
 
+    // Copy the workflow's reference documents into the chat's project (if it
+    // has one) before the doc context is built, and hand their ids straight to
+    // the builder so the template is usable in this very turn.
+    const workflowDocs = lastUser?.workflow?.id
+        ? await materializeWorkflowDocuments({
+              workflowId: lastUser.workflow.id,
+              projectId: resolvedProjectId ?? null,
+              userId,
+              db,
+          })
+        : [];
+
     const { docIndex, docStore } = await buildDocContext(
         messages,
         userId,
         db,
         chatId,
+        workflowDocs.map((doc) => doc.document_id),
     );
     const docAvailability = Object.entries(docIndex).map(([doc_id, info]) => ({
         doc_id,
