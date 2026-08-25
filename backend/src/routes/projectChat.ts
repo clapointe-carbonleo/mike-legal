@@ -212,6 +212,7 @@ projectChatRouter.post("/", requireAuth, async (req, res) => {
             signal: streamAbort.signal,
             projectId,
             outputFolderId,
+            preMaterializedWorkflowId: lastUser?.workflow?.id ?? null,
         });
 
         const persistedEvents = stripTransientAssistantEvents(events);

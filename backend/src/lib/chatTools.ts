@@ -1912,6 +1912,7 @@ export async function runToolCalls(
   courtlistenerState?: CourtlistenerTurnState,
   apiKeys?: import("./llm").UserApiKeys,
   outputFolderId?: string | null,
+  preMaterializedWorkflowId?: string | null,
 ): Promise<{
   toolResults: unknown[];
   docsRead: { filename: string; document_id?: string }[];
@@ -2129,8 +2130,11 @@ export async function runToolCalls(
       // them so read_document / edit_document can act on them in this same
       // turn. Copies are deduped per project, so doing it here and up-front in
       // the route never produces two.
+      // Skip when the route already materialised this workflow before the
+      // turn: its documents are in the doc context and the system prompt
+      // already lists them.
       let workflowDocNote = "";
-      if (wf && docIndex) {
+      if (wf && docIndex && wfId !== preMaterializedWorkflowId) {
         const materialised = await materializeWorkflowDocuments({
           workflowId: wfId,
           projectId: projectId ?? null,
@@ -3508,6 +3512,11 @@ export async function runLLMStream(params: {
   projectId?: string | null;
   /** Project subfolder that generated documents are filed into, if any. */
   outputFolderId?: string | null;
+  /**
+   * Workflow whose reference documents the route already materialised before
+   * the turn started. read_workflow skips redoing that work for this id.
+   */
+  preMaterializedWorkflowId?: string | null;
 }): Promise<{
   fullText: string;
   events: AssistantEvent[];
@@ -3530,6 +3539,7 @@ export async function runLLMStream(params: {
     signal,
     projectId,
     outputFolderId,
+    preMaterializedWorkflowId,
   } = params;
   const researchTools = includeResearchTools ? COURTLISTENER_TOOLS : [];
   const mcpTools = await buildUserMcpTools(userId, db);
@@ -3754,6 +3764,7 @@ export async function runLLMStream(params: {
         courtlistenerTurnState,
         apiKeys,
         outputFolderId,
+        preMaterializedWorkflowId,
       );
         throwIfAborted(signal);
         for (const r of docsRead) {

@@ -611,6 +611,7 @@ chatRouter.post("/", requireAuth, async (req, res) => {
             signal: streamAbort.signal,
             projectId: resolvedProjectId,
             outputFolderId,
+            preMaterializedWorkflowId: lastUser?.workflow?.id ?? null,
         });
 
         devLog("[chat/stream] LLM stream finished", {
